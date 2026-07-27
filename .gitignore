@@ -3,3 +3,33 @@
 .claude
 .vscode
 .gemini
+
+# Environments
+.env.local
+*.env
+
+# Go
+backend/bin/
+backend/*.test
+backend/coverage.out
+
+# Python
+ai/.venv/
+ai/__pycache__/
+ai/**/__pycache__/
+ai/*.egg-info/
+ai/.pytest_cache/
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/coverage/
+
+# Editors / OS
+.idea/
+.DS_Store
+
+# kind / kubeconfig
+kubeconfig*.yaml
+*.kubeconfig

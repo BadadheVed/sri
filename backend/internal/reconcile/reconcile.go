@@ -113,7 +113,7 @@ func (r *Reconciler) handleIncident(ctx context.Context, incident correlate.Inci
 	}
 	slog.Info("incident detected", "incident_id", incidentID, "namespace", incident.Namespace, "kind", incident.Kind, "name", incident.Name, "failure_mode", diagnosis.FailureMode)
 
-	if diagnosis.RecommendedAction == "restart_pod" {
+	if r.mode == gate.ModeAuto && diagnosis.RecommendedAction == "restart_pod" {
 		attempts := r.recordRestartAttempt(incident.GroupKey)
 		if attempts > maxAutoRestarts {
 			// Checked before CreateRemediationAction on purpose — a

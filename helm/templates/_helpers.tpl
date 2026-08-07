@@ -99,10 +99,9 @@ namespace, not a multi-tenant app).
 {{- end -}}
 
 {{/*
-DATABASE_URL as a literal connection string. Only valid to call when NOT
-using secrets.existingSecret or externalDatabase.existingSecret — those two
-cases reference an existing Secret key directly (see templates/secret.yaml)
-instead of rendering a literal value here.
+DATABASE_URL as a literal connection string. This helper is only used by
+templates/secret.yaml when the chart manages the Secret (i.e. when
+secrets.existingSecret is unset).
 */}}
 {{- define "sage.databaseUrl" -}}
 {{- if .Values.postgresql.enabled -}}

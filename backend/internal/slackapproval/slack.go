@@ -57,8 +57,8 @@ type postMessageResponse struct {
 
 func (c *Client) PostApproval(ctx context.Context, req ApprovalRequest) (string, error) {
 	text := fmt.Sprintf(
-		"Remediation approval needed\nIncident: %s/%s in %s\nDiagnosis: %s\nProposed action: %s\nAction ID: %s",
-		req.Namespace, req.Name, req.Namespace, req.FailureMode, req.Action, req.ActionID,
+		"Remediation approval needed\nIncident: %s/%s\nDiagnosis: %s\nProposed action: %s\nAction ID: %s",
+		req.Namespace, req.Name, req.FailureMode, req.Action, req.ActionID,
 	)
 	return c.postMessage(ctx, text)
 }

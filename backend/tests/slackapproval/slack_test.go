@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -41,6 +42,38 @@ func TestPostApproval_SendsMessageAndReturnsTimestamp(t *testing.T) {
 	}
 	if ts != "1700000000.000100" {
 		t.Errorf("expected ts from Slack response, got %q", ts)
+	}
+}
+
+func TestPostNotification_SendsMessageAndReturnsTimestamp(t *testing.T) {
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat.postMessage" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"ts":"1700000000.000200"}`))
+	}))
+	defer server.Close()
+
+	c := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", server.Client())
+	c.APIBaseURL = server.URL
+
+	ts, err := c.PostNotification(t.Context(), slackapproval.NotificationRequest{
+		IncidentID: "incident-1", ActionID: "action-1",
+		FailureMode: "CrashLoopBackOff", Action: "restart_pod",
+		Namespace: "default", Name: "web-1", Outcome: "resolved",
+	})
+	if err != nil {
+		t.Fatalf("PostNotification: %v", err)
+	}
+	if ts != "1700000000.000200" {
+		t.Errorf("expected ts from Slack response, got %q", ts)
+	}
+	if !strings.Contains(gotBody, "auto-remediated") || !strings.Contains(gotBody, "resolved") {
+		t.Errorf("expected notification text to mention auto-remediation and outcome, got body: %s", gotBody)
 	}
 }
 

@@ -3,8 +3,9 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"k8s.io/client-go/kubernetes"
@@ -25,25 +26,31 @@ type RestartPodOutput struct {
 }
 
 func main() {
-	// settings.Load() fails fast (log.Fatal) if MCP_EXECUTE_TOKEN or any
+	// settings.Load() fails fast (os.Exit) if MCP_EXECUTE_TOKEN or any
 	// other required var is missing — this process cannot reach
 	// ListenAndServe below with incomplete config.
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 	s := settings.Load()
 
 	restConfig, err := clientcmd.BuildConfigFromFlags("", s.Kubeconfig)
 	if err != nil {
-		log.Fatalf("building kubeconfig: %v", err)
+		slog.Error("building kubeconfig", "error", err)
+		os.Exit(1)
 	}
 	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
-		log.Fatalf("building clientset: %v", err)
+		slog.Error("building clientset", "error", err)
+		os.Exit(1)
 	}
 	executor := execute.NewExecutor(clientset)
 
 	restartPod := func(ctx context.Context, req *mcp.CallToolRequest, input RestartPodInput) (*mcp.CallToolResult, RestartPodOutput, error) {
 		if err := executor.RestartPod(ctx, input.Namespace, input.Name); err != nil {
+			slog.Error("restart_pod failed", "namespace", input.Namespace, "name", input.Name, "error", err)
 			return nil, RestartPodOutput{}, err
 		}
+		slog.Info("restart_pod executed", "namespace", input.Namespace, "name", input.Name)
 		return nil, RestartPodOutput{Status: "deleted"}, nil
 	}
 
@@ -57,6 +64,19 @@ func main() {
 		return server
 	}, nil)
 
-	log.Printf("mcp-execute-server listening on %s", s.MCPExecuteAddr)
-	log.Fatal(http.ListenAndServe(s.MCPExecuteAddr, mcpauth.RequireBearerToken(s.MCPExecuteToken, handler)))
+	// /healthz is deliberately mounted outside the bearer-token wrapper — a
+	// Kubernetes liveness/readiness probe has no way to present a token, and
+	// this endpoint reports nothing about the cluster, only that the process
+	// is up. Every other route stays behind RequireBearerToken.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.Handle("/", mcpauth.RequireBearerToken(s.MCPExecuteToken, handler))
+
+	slog.Info("mcp-execute-server listening", "addr", s.MCPExecuteAddr)
+	if err := http.ListenAndServe(s.MCPExecuteAddr, mux); err != nil {
+		slog.Error("http server exited", "error", err)
+		os.Exit(1)
+	}
 }

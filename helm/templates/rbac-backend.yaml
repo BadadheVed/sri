@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "sage.backend.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.backend.selectorLabels" . | nindent 4 }}
+---
+# Read-only, cluster-wide: backend/ watches Events and reads Pods across the
+# whole cluster to detect and correlate incidents. It never mutates
+# anything — that capability lives only in the mcp-execute-server ClusterRole
+# below, deliberately as a separate, more narrowly scoped identity.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sage.rbac.backend.name" . }}
+  labels:
+    {{- include "sage.backend.selectorLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sage.rbac.backend.name" . }}
+  labels:
+    {{- include "sage.backend.selectorLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "sage.rbac.backend.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "sage.backend.fullname" . }}
+    namespace: {{ .Release.Namespace }}

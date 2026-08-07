@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -49,8 +50,9 @@ func NewClient(token, channel, signingSecret string, httpClient *http.Client) *C
 }
 
 type postMessageResponse struct {
-	OK bool   `json:"ok"`
-	TS string `json:"ts"`
+	OK    bool   `json:"ok"`
+	TS    string `json:"ts"`
+	Error string `json:"error"`
 }
 
 func (c *Client) PostApproval(ctx context.Context, req ApprovalRequest) (string, error) {
@@ -58,6 +60,34 @@ func (c *Client) PostApproval(ctx context.Context, req ApprovalRequest) (string,
 		"Remediation approval needed\nIncident: %s/%s in %s\nDiagnosis: %s\nProposed action: %s\nAction ID: %s",
 		req.Namespace, req.Name, req.Namespace, req.FailureMode, req.Action, req.ActionID,
 	)
+	return c.postMessage(ctx, text)
+}
+
+// NotificationRequest describes a non-blocking, FYI-only Slack message —
+// unlike ApprovalRequest, nothing waits on a human response to this one. It's
+// posted after auto mode has already executed and verified a remediation, so
+// there's a visible record even when no approval round-trip ever happens.
+type NotificationRequest struct {
+	IncidentID  string
+	ActionID    string
+	FailureMode string
+	Action      string
+	Namespace   string
+	Name        string
+	Outcome     string
+}
+
+func (c *Client) PostNotification(ctx context.Context, req NotificationRequest) (string, error) {
+	text := fmt.Sprintf(
+		"SAGE auto-remediated an incident (no approval required)\nIncident: %s/%s in %s\nDiagnosis: %s\nAction taken: %s\nOutcome: %s\nAction ID: %s",
+		req.Namespace, req.Name, req.Namespace, req.FailureMode, req.Action, req.Outcome, req.ActionID,
+	)
+	return c.postMessage(ctx, text)
+}
+
+// postMessage is the shared chat.postMessage call behind both PostApproval
+// and PostNotification — the two differ only in the text they send.
+func (c *Client) postMessage(ctx context.Context, text string) (string, error) {
 	body, err := json.Marshal(map[string]string{"channel": c.channel, "text": text})
 	if err != nil {
 		return "", err
@@ -81,7 +111,7 @@ func (c *Client) PostApproval(ctx context.Context, req ApprovalRequest) (string,
 		return "", err
 	}
 	if !parsed.OK {
-		return "", fmt.Errorf("slack chat.postMessage returned ok=false")
+		return "", fmt.Errorf("slack chat.postMessage failed: %s", parsed.Error)
 	}
 	return parsed.TS, nil
 }
@@ -131,6 +161,7 @@ func (c *Client) InteractionHandler(s store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bodyBytes, err := io.ReadAll(r.Body)
 		if err != nil {
+			slog.Warn("slack interaction: failed to read body", "error", err)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
@@ -141,22 +172,26 @@ func (c *Client) InteractionHandler(s store.Store) http.HandlerFunc {
 		// comparison, and fail both cases identically so a caller can't
 		// distinguish "stale timestamp" from "bad signature".
 		if !c.isTimestampFresh(timestamp) || !c.VerifySignature(timestamp, signature, bodyBytes) {
+			slog.Warn("slack interaction: rejected invalid signature or stale timestamp", "remote_addr", r.RemoteAddr)
 			http.Error(w, "invalid signature", http.StatusUnauthorized)
 			return
 		}
 
 		form, err := url.ParseQuery(string(bodyBytes))
 		if err != nil {
+			slog.Warn("slack interaction: failed to parse form body", "error", err)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 
 		var payload interactionPayload
 		if err := json.Unmarshal([]byte(form.Get("payload")), &payload); err != nil {
+			slog.Warn("slack interaction: failed to unmarshal payload", "error", err)
 			http.Error(w, "bad payload", http.StatusBadRequest)
 			return
 		}
 		if len(payload.Actions) == 0 {
+			slog.Warn("slack interaction: payload had no actions")
 			http.Error(w, "no action in payload", http.StatusBadRequest)
 			return
 		}
@@ -168,9 +203,11 @@ func (c *Client) InteractionHandler(s store.Store) http.HandlerFunc {
 		}
 
 		if err := s.RecordApprovalDecision(r.Context(), actionID, payload.User.Username, decision); err != nil {
+			slog.Error("slack interaction: RecordApprovalDecision failed", "action_id", actionID, "error", err)
 			http.Error(w, "failed to record decision", http.StatusInternalServerError)
 			return
 		}
+		slog.Info("slack interaction: approval decision recorded", "action_id", actionID, "decision", decision, "user", payload.User.Username)
 
 		w.WriteHeader(http.StatusOK)
 	}

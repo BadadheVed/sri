@@ -3,7 +3,7 @@ package reconcile
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -27,9 +27,19 @@ type PodRestarter interface {
 	RestartPod(ctx context.Context, namespace, name string) error
 }
 
+// maxAutoRestarts caps how many times SAGE will auto-execute restart_pod for
+// the same underlying object (see signal.Signal.GroupKey) before giving up
+// and alerting a human instead. Without this cap, a pod whose crash is
+// permanent rather than transient — a bad image, a broken config — gets
+// deleted and recreated forever, indistinguishable from progress. The count
+// is in-memory and resets on backend restart; that's an accepted tradeoff
+// for a v1 safety cap, not a persisted circuit breaker.
+const maxAutoRestarts = 5
+
 type Reconciler struct {
 	mu                sync.Mutex
 	pending           []signal.Signal
+	restartAttempts   map[string]int
 	store             store.Store
 	restarter         PodRestarter
 	slack             *slackapproval.Client
@@ -44,7 +54,17 @@ func New(s store.Store, restarter PodRestarter, slack *slackapproval.Client, cli
 	return &Reconciler{
 		store: s, restarter: restarter, slack: slack, clientset: clientset,
 		mode: mode, correlationWindow: correlationWindow, verifyTimeout: verifyTimeout,
+		restartAttempts: make(map[string]int),
 	}
+}
+
+// recordRestartAttempt increments and returns the running restart-attempt
+// count for groupKey.
+func (r *Reconciler) recordRestartAttempt(groupKey string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.restartAttempts[groupKey]++
+	return r.restartAttempts[groupKey]
 }
 
 // OnSignal is the watcher's callback: append the new signal, re-correlate
@@ -82,35 +102,80 @@ func (r *Reconciler) OnSignal(ctx context.Context, s signal.Signal) {
 func (r *Reconciler) handleIncident(ctx context.Context, incident correlate.Incident) bool {
 	diagnosis, matched := r.analyzer.Analyze(incident)
 	if !matched {
+		slog.Debug("no analyzer match for incident", "namespace", incident.Namespace, "kind", incident.Kind, "name", incident.Name)
 		return false
 	}
 
 	incidentID, err := r.store.CreateIncident(ctx, incident.Namespace, incident.Kind, incident.Name, diagnosis.FailureMode, incident.FirstSeen, incident.LastSeen)
 	if err != nil {
-		log.Printf("CreateIncident: %v", err)
+		slog.Error("CreateIncident failed", "namespace", incident.Namespace, "kind", incident.Kind, "name", incident.Name, "error", err)
 		return false
+	}
+	slog.Info("incident detected", "incident_id", incidentID, "namespace", incident.Namespace, "kind", incident.Kind, "name", incident.Name, "failure_mode", diagnosis.FailureMode)
+
+	if diagnosis.RecommendedAction == "restart_pod" {
+		attempts := r.recordRestartAttempt(incident.GroupKey)
+		if attempts > maxAutoRestarts {
+			// Checked before CreateRemediationAction on purpose — a
+			// suppressed attempt was never decided on or executed, so it
+			// shouldn't leave a dangling remediation_actions row behind.
+			r.suppressRestart(ctx, incident, incidentID, diagnosis, attempts)
+			return true
+		}
 	}
 
 	decision := gate.Evaluate(diagnosis.RecommendedAction, r.mode)
 	actionID, err := r.store.CreateRemediationAction(ctx, incidentID, diagnosis.RecommendedAction, decision.RequiresApproval, decision.Reason)
 	if err != nil {
-		log.Printf("CreateRemediationAction: %v", err)
+		slog.Error("CreateRemediationAction failed", "incident_id", incidentID, "error", err)
 		return true
 	}
+	slog.Info("gate decision", "incident_id", incidentID, "action_id", actionID, "action", diagnosis.RecommendedAction, "requires_approval", decision.RequiresApproval, "reason", decision.Reason)
 
 	if decision.RequiresApproval {
-		if _, err := r.slack.PostApproval(ctx, slackapproval.ApprovalRequest{
+		ts, err := r.slack.PostApproval(ctx, slackapproval.ApprovalRequest{
 			IncidentID: incidentID, ActionID: actionID,
 			FailureMode: diagnosis.FailureMode, Action: diagnosis.RecommendedAction,
 			Namespace: incident.Namespace, Name: incident.Name,
-		}); err != nil {
-			log.Printf("PostApproval: %v", err)
+		})
+		if err != nil {
+			slog.Error("PostApproval failed", "incident_id", incidentID, "action_id", actionID, "error", err)
+		} else {
+			slog.Info("approval request posted to Slack", "incident_id", incidentID, "action_id", actionID, "slack_ts", ts)
 		}
 		return true // execution resumes from the Slack interaction handler in a later plan
 	}
 
-	r.executeAndVerify(ctx, incident, incidentID, actionID)
+	r.executeAndVerify(ctx, incident, incidentID, actionID, diagnosis)
 	return true
+}
+
+// suppressRestart records that auto-remediation has given up on incident's
+// object after maxAutoRestarts attempts, and alerts a human via Slack — a
+// pod that still needs restarting after 5 tries has a permanent problem
+// restarting can't fix, and silently continuing would just churn the
+// cluster forever.
+func (r *Reconciler) suppressRestart(ctx context.Context, incident correlate.Incident, incidentID string, diagnosis *analyze.Diagnosis, attempts int) {
+	slog.Warn("restart limit exceeded, suppressing further auto-remediation",
+		"incident_id", incidentID, "group_key", incident.GroupKey, "namespace", incident.Namespace, "name", incident.Name,
+		"attempts", attempts, "limit", maxAutoRestarts)
+
+	if err := r.store.WriteAudit(ctx, incidentID, "remediation_suppressed", map[string]any{
+		"reason": "restart_limit_exceeded", "group_key": incident.GroupKey, "attempts": attempts, "limit": maxAutoRestarts,
+	}); err != nil {
+		slog.Error("WriteAudit failed", "incident_id", incidentID, "error", err)
+	}
+
+	ts, err := r.slack.PostNotification(ctx, slackapproval.NotificationRequest{
+		IncidentID: incidentID, ActionID: "",
+		FailureMode: diagnosis.FailureMode, Action: "none — restart limit reached, manual intervention required",
+		Namespace: incident.Namespace, Name: incident.Name, Outcome: "suppressed",
+	})
+	if err != nil {
+		slog.Error("PostNotification failed", "incident_id", incidentID, "error", err)
+	} else {
+		slog.Info("restart-limit alert posted to Slack", "incident_id", incidentID, "slack_ts", ts)
+	}
 }
 
 // forgetObjectSignals removes every currently-pending signal belonging to the
@@ -133,28 +198,45 @@ func (r *Reconciler) forgetObjectSignals(namespace, kind, name string) {
 	r.pending = remaining
 }
 
-func (r *Reconciler) executeAndVerify(ctx context.Context, incident correlate.Incident, incidentID, actionID string) {
+func (r *Reconciler) executeAndVerify(ctx context.Context, incident correlate.Incident, incidentID, actionID string, diagnosis *analyze.Diagnosis) {
 	if err := r.restarter.RestartPod(ctx, incident.Namespace, incident.Name); err != nil {
-		log.Printf("RestartPod: %v", err)
+		slog.Error("RestartPod failed", "incident_id", incidentID, "action_id", actionID, "namespace", incident.Namespace, "name", incident.Name, "error", err)
 		return
 	}
+	slog.Info("remediation executed", "incident_id", incidentID, "action_id", actionID, "action", diagnosis.RecommendedAction, "namespace", incident.Namespace, "name", incident.Name)
 	if err := r.store.MarkExecuted(ctx, actionID); err != nil {
-		log.Printf("MarkExecuted: %v", err)
+		slog.Error("MarkExecuted failed", "action_id", actionID, "error", err)
 	}
 
 	healthy, err := verify.CheckPodHealthy(ctx, r.clientset, incident.Namespace, incident.Signals[0].Labels, r.verifyTimeout, time.Second)
 	if err != nil {
-		log.Printf("CheckPodHealthy: %v", err)
+		slog.Error("CheckPodHealthy failed", "incident_id", incidentID, "action_id", actionID, "error", err)
 		return
 	}
 	outcome := "resolved"
 	if !healthy {
 		outcome = "unresolved"
 	}
+	slog.Info("remediation verified", "incident_id", incidentID, "action_id", actionID, "outcome", outcome)
 	if err := r.store.MarkVerified(ctx, actionID, outcome); err != nil {
-		log.Printf("MarkVerified: %v", err)
+		slog.Error("MarkVerified failed", "action_id", actionID, "error", err)
 	}
 	if err := r.store.WriteAudit(ctx, incidentID, "remediation_verified", map[string]any{"outcome": outcome}); err != nil {
-		log.Printf("WriteAudit: %v", err)
+		slog.Error("WriteAudit failed", "incident_id", incidentID, "error", err)
+	}
+
+	// Auto mode never goes through PostApproval (no human is in the loop), so
+	// without this the only record of an auto-remediation would be the DB —
+	// this is a non-blocking FYI, not a gate, and its failure must never
+	// affect the remediation outcome already recorded above.
+	ts, err := r.slack.PostNotification(ctx, slackapproval.NotificationRequest{
+		IncidentID: incidentID, ActionID: actionID,
+		FailureMode: diagnosis.FailureMode, Action: diagnosis.RecommendedAction,
+		Namespace: incident.Namespace, Name: incident.Name, Outcome: outcome,
+	})
+	if err != nil {
+		slog.Error("PostNotification failed", "incident_id", incidentID, "action_id", actionID, "error", err)
+	} else {
+		slog.Info("auto-remediation notification posted to Slack", "incident_id", incidentID, "action_id", actionID, "slack_ts", ts)
 	}
 }

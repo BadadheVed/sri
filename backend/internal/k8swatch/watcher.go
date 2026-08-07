@@ -3,6 +3,7 @@ package k8swatch
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -57,10 +58,24 @@ func (w *Watcher) HandleAddEvent(obj any) {
 	}
 
 	labels := map[string]string{}
+	groupKey := ev.InvolvedObject.Namespace + "/" + ev.InvolvedObject.Kind + "/" + ev.InvolvedObject.Name
 	pod, err := w.clientset.CoreV1().Pods(ev.InvolvedObject.Namespace).Get(context.Background(), ev.InvolvedObject.Name, metav1.GetOptions{})
 	if err == nil {
 		labels = pod.Labels
+		// A ReplicaSet-managed pod gets deleted and recreated under a brand
+		// new name every time it's remediated, so grouping restart attempts
+		// by pod name would never actually catch a repeatedly-failing
+		// workload. Group by the owning controller instead, when there is
+		// one — it stays the same across those recreations.
+		if len(pod.OwnerReferences) > 0 {
+			owner := pod.OwnerReferences[0]
+			groupKey = ev.InvolvedObject.Namespace + "/" + owner.Kind + "/" + owner.Name
+		}
+	} else {
+		slog.Warn("failed to fetch pod labels, continuing without them", "namespace", ev.InvolvedObject.Namespace, "name", ev.InvolvedObject.Name, "error", err)
 	}
+
+	slog.Info("signal detected", "source", signal.SourceK8sEvent, "failure_mode", failureMode, "namespace", ev.InvolvedObject.Namespace, "kind", ev.InvolvedObject.Kind, "name", ev.InvolvedObject.Name, "group_key", groupKey)
 
 	w.onSignal(signal.Signal{
 		Source:    signal.SourceK8sEvent,
@@ -72,5 +87,6 @@ func (w *Watcher) HandleAddEvent(obj any) {
 		Labels:    labels,
 		Timestamp: ev.LastTimestamp.Time,
 		Raw:       ev.Message,
+		GroupKey:  groupKey,
 	})
 }

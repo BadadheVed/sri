@@ -1,0 +1,74 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "sage.fullname" . }}-migration
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.labels" . | nindent 4 }}
+  annotations:
+    # post-install, not pre-install: pre-install hooks run BEFORE Helm
+    # creates any of the release's regular resources — and the bundled
+    # Postgres StatefulSet (from the postgresql subchart dependency) is a
+    # regular resource, not a hook. A pre-install migration Job would try to
+    # connect to a Postgres that doesn't exist yet on every fresh install.
+    # post-install runs after Postgres has at least been created (the
+    # pg_isready wait loop below handles it not being Ready yet).
+    helm.sh/hook: post-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "sage.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: Never
+      # This Job only ever talks to Postgres, never the Kubernetes API — no
+      # ServiceAccount token needed at all.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # postgres:16-alpine's default USER is root (its entrypoint needs
+        # root to chown a local data dir before dropping to "postgres" via
+        # gosu) — but this Job overrides `command` and never runs that
+        # entrypoint, so it never drops privilege on its own. Pin it to the
+        # image's built-in "postgres" user (uid=70,gid=70) directly; psql
+        # and pg_isready don't need root.
+        runAsUser: 70
+        runAsGroup: 70
+      containers:
+        - name: migrate
+          image: "{{ .Values.migration.image.repository }}:{{ .Values.migration.image.tag }}"
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              for i in $(seq 1 30); do
+                if pg_isready -d "$DATABASE_URL" >/dev/null 2>&1; then
+                  break
+                fi
+                echo "waiting for postgres to become ready... ($i/30)"
+                sleep 2
+              done
+              psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f /migrations/0001_init.sql
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sage.secretName" . }}
+                  key: DATABASE_URL
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: migrations
+          configMap:
+            name: {{ include "sage.fullname" . }}-migrations

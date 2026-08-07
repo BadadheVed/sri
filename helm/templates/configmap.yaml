@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sage.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.labels" . | nindent 4 }}
+data:
+  REMEDIATION_MODE: {{ include "sage.validatedMode" . | quote }}
+  VERIFY_TIMEOUT_SECONDS: {{ .Values.timeouts.verifySeconds | quote }}
+  CORRELATION_WINDOW_SECONDS: {{ .Values.timeouts.correlationWindowSeconds | quote }}
+  SLACK_APPROVAL_CHANNEL: {{ .Values.slack.approvalChannel | quote }}
+  BACKEND_HTTP_ADDR: {{ printf ":%d" (int .Values.backend.port) | quote }}
+  MCP_EXECUTE_ADDR: {{ printf ":%d" (int .Values.mcpExecute.port) | quote }}
+  MCP_EXECUTE_URL: {{ include "sage.mcpExecuteUrl" . | quote }}
+  # KUBECONFIG is deliberately never set here. Leaving it unset is what makes
+  # client-go fall back to in-cluster config automatically (it reads the
+  # ServiceAccount token/CA cert Kubernetes already mounts into the pod) —
+  # this is the entire mechanism that replaces mounting a kubeconfig Secret.

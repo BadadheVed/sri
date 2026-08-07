@@ -3,7 +3,7 @@ package settings
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -33,7 +33,7 @@ type Settings struct {
 
 // Load reads Settings from the process environment and fails fast — the
 // caller is guaranteed either a fully-populated Settings or a process that
-// has already exited via log.Fatal, so nothing downstream (Postgres
+// has already exited via os.Exit, so nothing downstream (Postgres
 // connection, HTTP server, watcher) can start against incomplete config.
 func Load() Settings {
 	s := Settings{
@@ -51,7 +51,8 @@ func Load() Settings {
 		MCPExecuteURL:        getenv("MCP_EXECUTE_URL", "http://localhost:8090"),
 	}
 	if err := s.Validate(); err != nil {
-		log.Fatalf("invalid settings: %v", err)
+		slog.Error("invalid settings", "error", err)
+		os.Exit(1)
 	}
 	return s
 }

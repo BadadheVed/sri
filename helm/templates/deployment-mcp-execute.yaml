@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sage.mcpExecute.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.mcpExecute.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.mcpExecute.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "sage.mcpExecute.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sage.mcpExecute.selectorLabels" . | nindent 8 }}
+      {{- with .Values.mcpExecute.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "sage.mcpExecute.fullname" . }}
+      # No kubeconfig mounted anywhere — client-go picks up this
+      # ServiceAccount's auto-mounted token via in-cluster config. This SA's
+      # ClusterRole grants exactly one verb: delete pods. Nothing else.
+      securityContext:
+        runAsNonRoot: true
+        # gcr.io/distroless/*:nonroot's USER is the name "nonroot", not a
+        # number — kubelet can't resolve that to verify runAsNonRoot without
+        # a numeric UID, so it fails closed unless pinned explicitly here.
+        # 65532 is that image's fixed nonroot UID/GID.
+        runAsUser: 65532
+        runAsGroup: 65532
+      containers:
+        - name: mcp-execute-server
+          image: "{{ .Values.mcpExecute.image.repository }}:{{ .Values.mcpExecute.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.mcpExecute.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mcpExecute.port }}
+          # settings.Load() requires the full env-var set (DATABASE_URL,
+          # Slack tokens included) even though this binary never uses
+          # Postgres or Slack directly — an existing app-level quirk, not
+          # something the chart can route around. Both Deployments must
+          # therefore mount the same ConfigMap+Secret.
+          envFrom:
+            - configMapRef:
+                name: {{ include "sage.fullname" . }}-config
+            - secretRef:
+                name: {{ include "sage.secretName" . }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          {{- with .Values.mcpExecute.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.mcpExecute.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mcpExecute.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mcpExecute.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

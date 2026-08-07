@@ -33,3 +33,11 @@ frontend/coverage/
 # kind / kubeconfig
 kubeconfig*.yaml
 *.kubeconfig
+
+# Helm values files with real secrets in them — never commit these
+helm/**/values.secret.yaml
+helm/**/values.prod.yaml
+
+# Helm dependency chart archives — build artifacts, not source. Chart.lock
+# pins the exact version; `helm dependency build` refetches them from that.
+helm/charts/*.tgz

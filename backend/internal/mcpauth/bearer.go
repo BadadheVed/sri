@@ -3,6 +3,7 @@ package mcpauth
 
 import (
 	"crypto/subtle"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -17,11 +18,13 @@ func RequireBearerToken(expectedToken string, next http.Handler) http.Handler {
 		auth := r.Header.Get("Authorization")
 		const prefix = "Bearer "
 		if !strings.HasPrefix(auth, prefix) {
+			slog.Warn("mcp-execute-server: rejected request with no bearer token", "remote_addr", r.RemoteAddr, "path", r.URL.Path)
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
 			return
 		}
 		token := strings.TrimPrefix(auth, prefix)
 		if subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) != 1 {
+			slog.Warn("mcp-execute-server: rejected request with invalid bearer token", "remote_addr", r.RemoteAddr, "path", r.URL.Path)
 			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 			return
 		}

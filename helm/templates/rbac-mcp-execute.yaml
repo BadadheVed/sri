@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "sage.mcpExecute.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.mcpExecute.selectorLabels" . | nindent 4 }}
+---
+# The ONLY identity in this chart with write access to the cluster, and the
+# only permission it has at all is deleting pods — nothing else. This is the
+# infrastructure-level enforcement of the same boundary the application code
+# already holds: backend/ can only ever request a restart via the
+# bearer-token-gated MCP server; even if that application-level gate had a
+# bug, this ClusterRole is the hard stop.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sage.rbac.mcpExecute.name" . }}
+  labels:
+    {{- include "sage.mcpExecute.selectorLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sage.rbac.mcpExecute.name" . }}
+  labels:
+    {{- include "sage.mcpExecute.selectorLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "sage.rbac.mcpExecute.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "sage.mcpExecute.fullname" . }}
+    namespace: {{ .Release.Namespace }}

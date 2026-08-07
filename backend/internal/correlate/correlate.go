@@ -11,6 +11,7 @@ type Incident struct {
 	Namespace string
 	Kind      string
 	Name      string
+	GroupKey  string
 	Signals   []signal.Signal
 	FirstSeen time.Time
 	LastSeen  time.Time
@@ -44,6 +45,7 @@ func Correlate(signals []signal.Signal, window time.Duration) []Incident {
 				Namespace: key.Namespace,
 				Kind:      key.Kind,
 				Name:      key.Name,
+				GroupKey:  current[0].GroupKey,
 				Signals:   append([]signal.Signal{}, current...),
 				FirstSeen: current[0].Timestamp,
 				LastSeen:  current[len(current)-1].Timestamp,

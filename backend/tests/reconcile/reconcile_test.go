@@ -2,6 +2,7 @@ package reconcile_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -70,6 +71,7 @@ func TestWatcherToReconciler_HealsCrashLoopInAutoMode(t *testing.T) {
 	clientset := fake.NewSimpleClientset(crashingPod, healthyReplacement)
 	memStore := store.NewMemoryStore()
 	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
+	slackClient.APIBaseURL = "http://127.0.0.1:0" // unreachable on purpose — auto mode's post-execution notification is fire-and-forget and must not need it to succeed for this assertion
 
 	// Rather than calling execute.Executor in-process, this test proves the
 	// real production call path: a real MCP server (backed by the same
@@ -121,6 +123,66 @@ func TestWatcherToReconciler_HealsCrashLoopInAutoMode(t *testing.T) {
 	}
 	if len(memStore.AuditEntries) != 1 {
 		t.Errorf("expected 1 audit entry recorded, got %d", len(memStore.AuditEntries))
+	}
+}
+
+// TestReconciler_OnSignal_SuppressesRestartAfterLimit reproduces the exact
+// scenario found in production: a Deployment-managed pod that crashes
+// permanently gets deleted and recreated under a brand new name by its
+// ReplicaSet every time SAGE "restarts" it, so pod-name-based correlation
+// would never notice it happening again and again. All 6 signals below
+// share a GroupKey (the owning ReplicaSet) but use distinct pod names, just
+// like real recreations would — proving the cap is enforced across incidents,
+// not just within one.
+func TestReconciler_OnSignal_SuppressesRestartAfterLimit(t *testing.T) {
+	ctx := context.Background()
+	healthyReplacement := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-healthy", Namespace: "team-a", Labels: map[string]string{"app": "worker"}},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	clientset := fake.NewSimpleClientset(healthyReplacement)
+	memStore := store.NewMemoryStore()
+	restarter := newCountingRestarter()
+	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
+	slackClient.APIBaseURL = "http://127.0.0.1:0" // unreachable on purpose — the restart-limit alert is fire-and-forget
+
+	r := reconcile.New(memStore, restarter, slackClient, clientset, gate.ModeAuto, 60*time.Second, 2*time.Second)
+
+	const groupKey = "team-a/ReplicaSet/worker-rs"
+	for i := 1; i <= 6; i++ {
+		r.OnSignal(ctx, signal.Signal{
+			Source: signal.SourceK8sEvent, Type: "CrashLoopBackOff",
+			Namespace: "team-a", Kind: "Pod", Name: fmt.Sprintf("worker-rs-%d", i),
+			Labels: map[string]string{"app": "worker"}, Timestamp: time.Now(),
+			GroupKey: groupKey,
+		})
+	}
+
+	totalRestarts := 0
+	for i := 1; i <= 6; i++ {
+		totalRestarts += restarter.count("team-a", fmt.Sprintf("worker-rs-%d", i))
+	}
+	if totalRestarts != 5 {
+		t.Fatalf("expected exactly 5 restarts across all 6 recreations (6th suppressed), got %d", totalRestarts)
+	}
+
+	var suppressed int
+	for _, entry := range memStore.AuditEntries {
+		if entry.EventType == "remediation_suppressed" {
+			suppressed++
+			if entry.Detail["group_key"] != groupKey {
+				t.Errorf("expected suppressed audit entry to reference group_key %q, got %v", groupKey, entry.Detail["group_key"])
+			}
+		}
+	}
+	if suppressed != 1 {
+		t.Fatalf("expected exactly 1 remediation_suppressed audit entry, got %d", suppressed)
+	}
+
+	if len(memStore.Incidents) != 6 {
+		t.Fatalf("expected all 6 incidents recorded (suppression still logs the incident), got %d", len(memStore.Incidents))
 	}
 }
 
@@ -183,6 +245,7 @@ func TestReconciler_OnSignal_DoesNotReRemediateAlreadyHandledObject(t *testing.T
 	memStore := store.NewMemoryStore()
 	restarter := newCountingRestarter()
 	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
+	slackClient.APIBaseURL = "http://127.0.0.1:0" // unreachable on purpose — auto mode's post-execution notification is fire-and-forget and must not need it to succeed for this assertion
 
 	r := reconcile.New(memStore, restarter, slackClient, clientset, gate.ModeAuto, 60*time.Second, 2*time.Second)
 

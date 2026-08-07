@@ -1,0 +1,93 @@
+nameOverride: ""
+fullnameOverride: ""
+imagePullSecrets: []
+
+backend:
+  # MUST stay 1 — reconcile.Reconciler has no leader election; running more
+  # than one replica risks duplicate remediation actions on the same
+  # incident. Enforced at template-render time, not just documented here.
+  replicaCount: 1
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  port: 8080
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: false
+    className: ""
+    host: ""
+    path: /slack
+    pathType: Prefix
+    annotations: {}
+    tls: []
+  resources: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+mcpExecute:
+  # Stateless and idempotent (restart_pod is safe to retry) — safely
+  # scalable if ever needed, unlike backend.
+  replicaCount: 1
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  port: 8090
+  resources: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # No service.type knob here at all, by design — see templates/service-mcp-execute.yaml.
+  # This is the only component with cluster-mutation credentials; it must
+  # never be reachable from outside the cluster, and there is deliberately
+  # no values.yaml key that could accidentally change that.
+
+remediation:
+  # "auto" or "manual" — validated by settings.Load() in the app itself, and
+  # checked again here so `helm install`/`helm template` fails fast with a
+  # clear message instead of deploying pods that will crash-loop.
+  mode: manual
+
+timeouts:
+  verifySeconds: 60
+  correlationWindowSeconds: 60
+
+slack:
+  approvalChannel: "#sre-approvals"
+  botToken: ""
+  signingSecret: ""
+
+mcpExecuteToken: ""
+
+secrets:
+  # Name of a pre-existing Secret with keys DATABASE_URL, SLACK_BOT_TOKEN,
+  # SLACK_SIGNING_SECRET, MCP_EXECUTE_TOKEN. When set, the chart's own
+  # secret.yaml is skipped entirely and slack.*/mcpExecuteToken/database
+  # values above are ignored — you own the Secret's lifecycle.
+  existingSecret: ""
+
+postgresql:
+  enabled: true
+  fullnameOverride: "sage-postgresql"
+  image:
+    tag: "16"
+  auth:
+    username: sage
+    password: "changeme"
+    database: sage
+
+externalDatabase:
+  # Only consulted when postgresql.enabled=false and secrets.existingSecret
+  # is unset.
+  url: ""
+
+migration:
+  image:
+    repository: postgres
+    tag: 16-alpine
+  backoffLimit: 2

@@ -1,0 +1,20 @@
+# type is deliberately hardcoded to ClusterIP, not sourced from values.yaml —
+# there is no mcpExecute.service.type knob anywhere in this chart. This is
+# the only component with cluster-mutation credentials; it must never be
+# reachable from outside the cluster, and it should be structurally
+# impossible for a values misconfiguration to change that.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sage.mcpExecute.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.mcpExecute.selectorLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.mcpExecute.port }}
+      targetPort: http
+  selector:
+    {{- include "sage.mcpExecute.selectorLabels" . | nindent 4 }}

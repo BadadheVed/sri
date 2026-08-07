@@ -1,0 +1,35 @@
+SAGE has been deployed to namespace {{ .Release.Namespace }}.
+
+{{- if eq .Values.postgresql.auth.password "changeme" }}
+
+⚠️  postgresql.auth.password is still the default placeholder "changeme".
+    Override it (--set postgresql.auth.password=... or via -f) before
+    using this anywhere beyond local/kind testing.
+{{- end }}
+
+Cold start: backend/'s startup connects to Postgres and does a live MCP
+handshake with mcp-execute-server *before* it starts serving traffic — on a
+fresh install it's normal to see a few CrashLoopBackOff cycles on the
+backend pod while the migration Job finishes and mcp-execute-server becomes
+ready. Kubernetes' own restart backoff resolves this without intervention.
+
+Check the migration Job:
+  kubectl logs job/{{ include "sage.fullname" . }}-migration -n {{ .Release.Namespace }}
+
+Reach the backend's /slack/interactions endpoint (Slack needs this
+reachable from the internet):
+{{- if .Values.backend.ingress.enabled }}
+  https://{{ .Values.backend.ingress.host }}{{ .Values.backend.ingress.path }}/interactions
+{{- else }}
+  No Ingress is enabled (backend.ingress.enabled=false). Either enable it,
+  set backend.service.type=LoadBalancer, or port-forward for local testing:
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "sage.backend.fullname" . }} 8080:{{ .Values.backend.port }}
+{{- end }}
+
+Reminder: backend.replicaCount must stay 1 (enforced at install time) —
+reconcile.Reconciler has no leader election. mcp-execute-server is stateless
+and safe to scale if you ever need to.
+
+mcp-execute-server is intentionally unreachable from outside the cluster —
+its Service is always ClusterIP with no values.yaml override, since it's the
+only component with permission to delete pods.

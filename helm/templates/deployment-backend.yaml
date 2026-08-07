@@ -1,0 +1,81 @@
+{{- if ne (int .Values.backend.replicaCount) 1 }}
+{{- fail "backend.replicaCount must be 1 — reconcile.Reconciler has no leader election; running more than one replica risks duplicate remediation actions on the same incident" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sage.backend.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.backend.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "sage.backend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sage.backend.selectorLabels" . | nindent 8 }}
+      {{- with .Values.backend.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "sage.backend.fullname" . }}
+      # No kubeconfig mounted anywhere — client-go picks up this
+      # ServiceAccount's auto-mounted token via in-cluster config, since
+      # KUBECONFIG is never set (see configmap.yaml).
+      securityContext:
+        runAsNonRoot: true
+        # gcr.io/distroless/*:nonroot's USER is the name "nonroot", not a
+        # number — kubelet can't resolve that to verify runAsNonRoot without
+        # a numeric UID, so it fails closed unless pinned explicitly here.
+        # 65532 is that image's fixed nonroot UID/GID.
+        runAsUser: 65532
+        runAsGroup: 65532
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "sage.fullname" . }}-config
+            - secretRef:
+                name: {{ include "sage.secretName" . }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          {{- with .Values.backend.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.backend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.backend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.backend.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

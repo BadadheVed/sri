@@ -1,0 +1,34 @@
+name: PR Build Prompt
+
+# GitHub comments can't hold real buttons — there's no webhook event for
+# "someone clicked something" inside a comment. A slash-command reply is the
+# closest real equivalent: this workflow posts the "option" (comment
+# `/build`), and pr-build-on-command.yml is what actually fires when the PR
+# author picks it.
+on:
+  pull_request:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  prompt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask whether to run the build check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: [
+                "### Build check available",
+                "",
+                "Comment `/build` on this PR to run the backend build, vet, and test suite against its latest commit.",
+                "",
+                "_Only the PR author (@" + context.payload.pull_request.user.login + ") can trigger this._",
+              ].join("\n"),
+            });

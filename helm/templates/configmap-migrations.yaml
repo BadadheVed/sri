@@ -8,3 +8,7 @@ metadata:
 data:
   0001_init.sql: |-
 {{ .Files.Get "files/migrations/0001_init.sql" | indent 4 }}
+  0002_pending_diagnosis.sql: |-
+{{ .Files.Get "files/migrations/0002_pending_diagnosis.sql" | indent 4 }}
+  0003_dead_letter_dispatches.sql: |-
+{{ .Files.Get "files/migrations/0003_dead_letter_dispatches.sql" | indent 4 }}

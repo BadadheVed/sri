@@ -24,12 +24,22 @@ type memAuditEntry struct {
 	Detail     map[string]any
 }
 
+type memDeadLetterEntry struct {
+	IncidentID string
+	Namespace  string
+	Kind       string
+	Name       string
+	Reason     string
+	Attempts   int
+}
+
 type MemoryStore struct {
-	mu           sync.Mutex
-	seq          int
-	Incidents    map[string]Incident
-	Actions      map[string]memAction
-	AuditEntries []memAuditEntry
+	mu                   sync.Mutex
+	seq                  int
+	Incidents            map[string]Incident
+	Actions              map[string]memAction
+	AuditEntries         []memAuditEntry
+	DeadLetterDispatches []memDeadLetterEntry
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -44,16 +54,29 @@ func (s *MemoryStore) nextID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, s.seq)
 }
 
-func (s *MemoryStore) CreateIncident(ctx context.Context, namespace, kind, name, failureMode string, firstSeen, lastSeen time.Time) (string, error) {
+func (s *MemoryStore) CreatePendingIncident(ctx context.Context, namespace, kind, name string, firstSeen, lastSeen time.Time) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := s.nextID("incident")
 	s.Incidents[id] = Incident{
 		ID: id, Namespace: namespace, Kind: kind, Name: name,
-		FailureMode: failureMode, Status: "detected",
+		Status:    "pending_diagnosis",
 		FirstSeen: firstSeen, LastSeen: lastSeen,
 	}
 	return id, nil
+}
+
+func (s *MemoryStore) RecordDiagnosis(ctx context.Context, incidentID, failureMode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	inc, ok := s.Incidents[incidentID]
+	if !ok {
+		return fmt.Errorf("unknown incident id %q", incidentID)
+	}
+	inc.FailureMode = failureMode
+	inc.Status = "diagnosed"
+	s.Incidents[incidentID] = inc
+	return nil
 }
 
 func (s *MemoryStore) CreateRemediationAction(ctx context.Context, incidentID, actionType string, requiresApproval bool, reason string) (string, error) {
@@ -112,5 +135,14 @@ func (s *MemoryStore) WriteAudit(ctx context.Context, incidentID, eventType stri
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.AuditEntries = append(s.AuditEntries, memAuditEntry{IncidentID: incidentID, EventType: eventType, Detail: detail})
+	return nil
+}
+
+func (s *MemoryStore) CreateDeadLetterDispatch(ctx context.Context, incidentID, namespace, kind, name, reason string, attempts int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.DeadLetterDispatches = append(s.DeadLetterDispatches, memDeadLetterEntry{
+		IncidentID: incidentID, Namespace: namespace, Kind: kind, Name: name, Reason: reason, Attempts: attempts,
+	})
 	return nil
 }

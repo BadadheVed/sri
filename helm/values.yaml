@@ -47,6 +47,55 @@ mcpExecute:
   # never be reachable from outside the cluster, and there is deliberately
   # no values.yaml key that could accidentally change that.
 
+nats:
+  enabled: true
+  fullnameOverride: "sage-nats"
+  # JetStream persistence for the pending-incidents stream — verified against
+  # `helm show values nats/nats --version 2.14.4` (Task 20); these keys match
+  # that chart's real values schema.
+  config:
+    jetstream:
+      enabled: true
+      fileStore:
+        pvc:
+          size: 1Gi
+
+mcpReadonly:
+  # Stateless and read-only — safely scalable if ever needed, same
+  # reasoning as mcpExecute.replicaCount's comment, opposite conclusion
+  # from backend's (which must stay 1).
+  replicaCount: 1
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  port: 8091
+  resources: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+ai:
+  replicaCount: 1
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+mcpReadonlyToken: ""
+diagnosisCallbackToken: ""
+
+llm:
+  provider: ""   # "anthropic" | "openai" | "openrouter" | "google"
+  model: ""
+  apiKey: ""
+
 remediation:
   # "auto" or "manual" — validated by settings.Load() in the app itself, and
   # checked again here so `helm install`/`helm template` fails fast with a

@@ -13,6 +13,12 @@ data:
   BACKEND_HTTP_ADDR: {{ printf ":%d" (int .Values.backend.port) | quote }}
   MCP_EXECUTE_ADDR: {{ printf ":%d" (int .Values.mcpExecute.port) | quote }}
   MCP_EXECUTE_URL: {{ include "sage.mcpExecuteUrl" . | quote }}
+  MCP_READONLY_ADDR: {{ printf ":%d" (int .Values.mcpReadonly.port) | quote }}
+  MCP_READONLY_URL: {{ include "sage.mcpReadonlyUrl" . | quote }}
+  NATS_URL: {{ include "sage.natsUrl" . | quote }}
+  BACKEND_CALLBACK_URL: {{ include "sage.backendCallbackUrl" . | quote }}
+  LLM_PROVIDER: {{ required "llm.provider is required (\"anthropic\", \"openai\", \"openrouter\", or \"google\")" .Values.llm.provider | quote }}
+  LLM_MODEL: {{ required "llm.model is required" .Values.llm.model | quote }}
   # KUBECONFIG is deliberately never set here. Leaving it unset is what makes
   # client-go fall back to in-cluster config automatically (it reads the
   # ServiceAccount token/CA cert Kubernetes already mounts into the pod) —

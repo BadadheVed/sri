@@ -10,17 +10,21 @@ import (
 
 func validSettings() settings.Settings {
 	return settings.Settings{
-		DatabaseURL:          "postgres://sre:sre@localhost:5432/sre_platform?sslmode=disable",
-		Mode:                 gate.ModeManual,
-		VerifyTimeout:        60 * time.Second,
-		CorrelationWindow:    60 * time.Second,
-		SlackBotToken:        "xoxb-real-token",
-		SlackSigningSecret:   "real-signing-secret",
-		SlackApprovalChannel: "#sre-approvals",
-		HTTPAddr:             ":8080",
-		MCPExecuteAddr:       ":8090",
-		MCPExecuteToken:      "real-shared-secret",
-		MCPExecuteURL:        "http://localhost:8090",
+		DatabaseURL:            "postgres://sre:sre@localhost:5432/sre_platform?sslmode=disable",
+		Mode:                   gate.ModeManual,
+		VerifyTimeout:          60 * time.Second,
+		CorrelationWindow:      60 * time.Second,
+		SlackBotToken:          "xoxb-real-token",
+		SlackSigningSecret:     "real-signing-secret",
+		SlackApprovalChannel:   "#sre-approvals",
+		HTTPAddr:               ":8080",
+		MCPExecuteAddr:         ":8090",
+		MCPExecuteToken:        "real-shared-secret",
+		MCPExecuteURL:          "http://localhost:8090",
+		MCPReadonlyAddr:        ":8091",
+		MCPReadonlyToken:       "real-readonly-token",
+		NATSURL:                "nats://localhost:4222",
+		DiagnosisCallbackToken: "real-diagnosis-token",
 	}
 }
 
@@ -71,6 +75,21 @@ func TestSettings_Validate_FailsWhenModeInvalid(t *testing.T) {
 				t.Errorf("expected error to mention REMEDIATION_MODE, got: %v", err)
 			}
 		})
+	}
+}
+
+func TestSettings_Validate_RequiresNATSDiagnosisAndReadonlyTokens(t *testing.T) {
+	s := validSettings()
+	s.NATSURL = ""
+	s.DiagnosisCallbackToken = ""
+	s.MCPReadonlyToken = ""
+
+	err := s.Validate()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !contains(err.Error(), "NATS_URL") || !contains(err.Error(), "DIAGNOSIS_CALLBACK_TOKEN") || !contains(err.Error(), "MCP_READONLY_TOKEN") {
+		t.Errorf("expected error to name all three missing fields, got: %v", err)
 	}
 }
 

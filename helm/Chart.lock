@@ -2,5 +2,8 @@ dependencies:
 - name: postgresql
   repository: oci://registry-1.docker.io/bitnamicharts
   version: 18.8.1
-digest: sha256:7b97e392aaec80cd1d186ea529330b9374860ef7fde3385da2584d23d09f9a22
-generated: "2026-07-27T23:32:03.563766+05:30"
+- name: nats
+  repository: https://nats-io.github.io/k8s/helm/charts/
+  version: 2.14.4
+digest: sha256:0b2af575c057fd8aa06aace1faab3c3e1ed73618a14d60ff31c3c785be031150
+generated: "2026-08-09T12:57:10.395535+05:30"

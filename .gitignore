@@ -6,7 +6,7 @@
 .claude
 .vscode
 .gemini
-
+*superpowers*
 # Environments
 .env.local
 *.env

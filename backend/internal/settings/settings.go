@@ -33,6 +33,11 @@ type Settings struct {
 	MCPReadonlyToken       string
 	NATSURL                string
 	DiagnosisCallbackToken string
+	PixieEnabled           bool
+	PixieConnMode          string
+	PixieVizierAddr        string
+	PixieAPIKey            string
+	PixieClusterID         string
 }
 
 // Load reads Settings from the process environment and fails fast — the
@@ -57,6 +62,11 @@ func Load() Settings {
 		MCPReadonlyToken:       getenv("MCP_READONLY_TOKEN", ""),
 		NATSURL:                getenv("NATS_URL", ""),
 		DiagnosisCallbackToken: getenv("DIAGNOSIS_CALLBACK_TOKEN", ""),
+		PixieEnabled:           getenv("PIXIE_ENABLED", "false") == "true",
+		PixieConnMode:          getenv("PIXIE_CONN_MODE", ""),
+		PixieVizierAddr:        getenv("PIXIE_VIZIER_ADDR", ""),
+		PixieAPIKey:            getenv("PIXIE_API_KEY", ""),
+		PixieClusterID:         getenv("PIXIE_CLUSTER_ID", ""),
 	}
 	if err := s.Validate(); err != nil {
 		slog.Error("invalid settings", "error", err)
@@ -93,6 +103,22 @@ func (s Settings) Validate() error {
 	}
 	if s.Mode != gate.ModeAuto && s.Mode != gate.ModeManual {
 		missing = append(missing, "REMEDIATION_MODE (invalid value)")
+	}
+	if s.PixieEnabled {
+		if s.PixieConnMode != "direct" && s.PixieConnMode != "cloud" {
+			missing = append(missing, "PIXIE_CONN_MODE")
+		}
+		if s.PixieVizierAddr == "" {
+			missing = append(missing, "PIXIE_VIZIER_ADDR")
+		}
+		if s.PixieConnMode == "cloud" {
+			if s.PixieAPIKey == "" {
+				missing = append(missing, "PIXIE_API_KEY")
+			}
+			if s.PixieClusterID == "" {
+				missing = append(missing, "PIXIE_CLUSTER_ID")
+			}
+		}
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))

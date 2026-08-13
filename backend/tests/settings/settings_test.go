@@ -93,6 +93,60 @@ func TestSettings_Validate_RequiresNATSDiagnosisAndReadonlyTokens(t *testing.T) 
 	}
 }
 
+func TestSettings_Validate_PixieDisabledRequiresNothingExtra(t *testing.T) {
+	s := validSettings()
+	s.PixieEnabled = false
+	// deliberately leave every Pixie field empty
+	if err := s.Validate(); err != nil {
+		t.Fatalf("expected no error when Pixie is disabled, got: %v", err)
+	}
+}
+
+func TestSettings_Validate_PixieEnabledRequiresConnModeAndVizierAddr(t *testing.T) {
+	s := validSettings()
+	s.PixieEnabled = true
+	s.PixieConnMode = ""
+	s.PixieVizierAddr = ""
+
+	err := s.Validate()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !contains(err.Error(), "PIXIE_CONN_MODE") || !contains(err.Error(), "PIXIE_VIZIER_ADDR") {
+		t.Errorf("expected error to name both missing fields, got: %v", err)
+	}
+}
+
+func TestSettings_Validate_PixieCloudModeRequiresAPIKeyAndClusterID(t *testing.T) {
+	s := validSettings()
+	s.PixieEnabled = true
+	s.PixieConnMode = "cloud"
+	s.PixieVizierAddr = "cloud.example.com:443"
+	s.PixieAPIKey = ""
+	s.PixieClusterID = ""
+
+	err := s.Validate()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !contains(err.Error(), "PIXIE_API_KEY") || !contains(err.Error(), "PIXIE_CLUSTER_ID") {
+		t.Errorf("expected error to name both missing fields, got: %v", err)
+	}
+}
+
+func TestSettings_Validate_PixieDirectModeDoesNotRequireAPIKeyOrClusterID(t *testing.T) {
+	s := validSettings()
+	s.PixieEnabled = true
+	s.PixieConnMode = "direct"
+	s.PixieVizierAddr = "vizier.pl.svc:59300"
+	s.PixieAPIKey = ""
+	s.PixieClusterID = ""
+
+	if err := s.Validate(); err != nil {
+		t.Fatalf("expected no error for direct mode without APIKey/ClusterID, got: %v", err)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
 		func() bool {

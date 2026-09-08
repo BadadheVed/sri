@@ -88,7 +88,7 @@ func TestInteractionHandler_ApprovesOnValidSignature(t *testing.T) {
 	c := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
 	memStore := store.NewMemoryStore()
 
-	incidentID, _ := memStore.CreateIncident(t.Context(), "default", "Pod", "web-1", "CrashLoopBackOff", time.Now(), time.Now())
+	incidentID, _ := memStore.CreatePendingIncident(t.Context(), "default", "Pod", "web-1", time.Now(), time.Now())
 	actionID, _ := memStore.CreateRemediationAction(t.Context(), incidentID, "restart_pod", true, "manual_mode")
 
 	payload := url.Values{}

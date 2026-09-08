@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"sre-platform/backend/internal/httpserver"
+	"sre-platform/backend/internal/incidentqueue"
 	"sre-platform/backend/internal/k8swatch"
 	"sre-platform/backend/internal/mcpexecute"
 	"sre-platform/backend/internal/reconcile"
@@ -38,11 +39,16 @@ func main() {
 		slog.Error("connecting to mcp-execute-server", "error", err)
 		os.Exit(1)
 	}
+	publisher, err := incidentqueue.NewClient(ctx, cfg.NATSURL)
+	if err != nil {
+		slog.Error("connecting to NATS", "error", err)
+		os.Exit(1)
+	}
 
-	reconciler := reconcile.New(pgStore, restarter, slackClient, clientset, cfg.Mode, cfg.CorrelationWindow, cfg.VerifyTimeout)
+	reconciler := reconcile.New(pgStore, restarter, publisher, slackClient, clientset, cfg.Mode, cfg.CorrelationWindow, cfg.VerifyTimeout)
 	watcher := k8swatch.NewWatcher(clientset, func(s signal.Signal) { reconciler.OnSignal(ctx, s) })
 
-	router := httpserver.NewRouter(slackClient, pgStore)
+	router := httpserver.NewRouter(slackClient, pgStore, reconciler, cfg.DiagnosisCallbackToken)
 	go func() {
 		slog.Info("listening", "addr", cfg.HTTPAddr)
 		if err := http.ListenAndServe(cfg.HTTPAddr, router); err != nil {

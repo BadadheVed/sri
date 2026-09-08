@@ -10,17 +10,21 @@ import (
 
 func validSettings() settings.Settings {
 	return settings.Settings{
-		DatabaseURL:          "postgres://sre:sre@localhost:5432/sre_platform?sslmode=disable",
-		Mode:                 gate.ModeManual,
-		VerifyTimeout:        60 * time.Second,
-		CorrelationWindow:    60 * time.Second,
-		SlackBotToken:        "xoxb-real-token",
-		SlackSigningSecret:   "real-signing-secret",
-		SlackApprovalChannel: "#sre-approvals",
-		HTTPAddr:             ":8080",
-		MCPExecuteAddr:       ":8090",
-		MCPExecuteToken:      "real-shared-secret",
-		MCPExecuteURL:        "http://localhost:8090",
+		DatabaseURL:            "postgres://sre:sre@localhost:5432/sre_platform?sslmode=disable",
+		Mode:                   gate.ModeManual,
+		VerifyTimeout:          60 * time.Second,
+		CorrelationWindow:      60 * time.Second,
+		SlackBotToken:          "xoxb-real-token",
+		SlackSigningSecret:     "real-signing-secret",
+		SlackApprovalChannel:   "#sre-approvals",
+		HTTPAddr:               ":8080",
+		MCPExecuteAddr:         ":8090",
+		MCPExecuteToken:        "real-shared-secret",
+		MCPExecuteURL:          "http://localhost:8090",
+		MCPReadonlyAddr:        ":8091",
+		MCPReadonlyToken:       "real-readonly-token",
+		NATSURL:                "nats://localhost:4222",
+		DiagnosisCallbackToken: "real-diagnosis-token",
 	}
 }
 
@@ -71,6 +75,75 @@ func TestSettings_Validate_FailsWhenModeInvalid(t *testing.T) {
 				t.Errorf("expected error to mention REMEDIATION_MODE, got: %v", err)
 			}
 		})
+	}
+}
+
+func TestSettings_Validate_RequiresNATSDiagnosisAndReadonlyTokens(t *testing.T) {
+	s := validSettings()
+	s.NATSURL = ""
+	s.DiagnosisCallbackToken = ""
+	s.MCPReadonlyToken = ""
+
+	err := s.Validate()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !contains(err.Error(), "NATS_URL") || !contains(err.Error(), "DIAGNOSIS_CALLBACK_TOKEN") || !contains(err.Error(), "MCP_READONLY_TOKEN") {
+		t.Errorf("expected error to name all three missing fields, got: %v", err)
+	}
+}
+
+func TestSettings_Validate_PixieDisabledRequiresNothingExtra(t *testing.T) {
+	s := validSettings()
+	s.PixieEnabled = false
+	// deliberately leave every Pixie field empty
+	if err := s.Validate(); err != nil {
+		t.Fatalf("expected no error when Pixie is disabled, got: %v", err)
+	}
+}
+
+func TestSettings_Validate_PixieEnabledRequiresConnModeAndVizierAddr(t *testing.T) {
+	s := validSettings()
+	s.PixieEnabled = true
+	s.PixieConnMode = ""
+	s.PixieVizierAddr = ""
+
+	err := s.Validate()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !contains(err.Error(), "PIXIE_CONN_MODE") || !contains(err.Error(), "PIXIE_VIZIER_ADDR") {
+		t.Errorf("expected error to name both missing fields, got: %v", err)
+	}
+}
+
+func TestSettings_Validate_PixieCloudModeRequiresAPIKeyAndClusterID(t *testing.T) {
+	s := validSettings()
+	s.PixieEnabled = true
+	s.PixieConnMode = "cloud"
+	s.PixieVizierAddr = "cloud.example.com:443"
+	s.PixieAPIKey = ""
+	s.PixieClusterID = ""
+
+	err := s.Validate()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !contains(err.Error(), "PIXIE_API_KEY") || !contains(err.Error(), "PIXIE_CLUSTER_ID") {
+		t.Errorf("expected error to name both missing fields, got: %v", err)
+	}
+}
+
+func TestSettings_Validate_PixieDirectModeDoesNotRequireAPIKeyOrClusterID(t *testing.T) {
+	s := validSettings()
+	s.PixieEnabled = true
+	s.PixieConnMode = "direct"
+	s.PixieVizierAddr = "vizier.pl.svc:59300"
+	s.PixieAPIKey = ""
+	s.PixieClusterID = ""
+
+	if err := s.Validate(); err != nil {
+		t.Fatalf("expected no error for direct mode without APIKey/ClusterID, got: %v", err)
 	}
 }
 

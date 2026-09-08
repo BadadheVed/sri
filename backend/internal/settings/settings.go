@@ -17,18 +17,28 @@ import (
 // cmd/mcp-execute-server both load one of these) — no other package calls
 // os.Getenv directly.
 type Settings struct {
-	DatabaseURL          string
-	Kubeconfig           string
-	Mode                 gate.Mode
-	VerifyTimeout        time.Duration
-	CorrelationWindow    time.Duration
-	SlackBotToken        string
-	SlackSigningSecret   string
-	SlackApprovalChannel string
-	HTTPAddr             string
-	MCPExecuteAddr       string
-	MCPExecuteToken      string
-	MCPExecuteURL        string
+	DatabaseURL                string
+	Kubeconfig                 string
+	Mode                       gate.Mode
+	VerifyTimeout              time.Duration
+	CorrelationWindow          time.Duration
+	SlackBotToken              string
+	SlackSigningSecret         string
+	SlackApprovalChannel       string
+	HTTPAddr                   string
+	MCPExecuteAddr             string
+	MCPExecuteToken            string
+	MCPExecuteURL              string
+	MCPReadonlyAddr            string
+	MCPReadonlyToken           string
+	NATSURL                    string
+	DiagnosisCallbackToken     string
+	PixieEnabled               bool
+	PixieConnMode              string
+	PixieVizierAddr            string
+	PixieAPIKey                string
+	PixieClusterID             string
+	PixieInsecureSkipTLSVerify bool
 }
 
 // Load reads Settings from the process environment and fails fast — the
@@ -37,18 +47,28 @@ type Settings struct {
 // connection, HTTP server, watcher) can start against incomplete config.
 func Load() Settings {
 	s := Settings{
-		DatabaseURL:          getenv("DATABASE_URL", ""),
-		Kubeconfig:           getenv("KUBECONFIG", ""),
-		Mode:                 gate.Mode(getenv("REMEDIATION_MODE", "manual")),
-		VerifyTimeout:        seconds(getenv("VERIFY_TIMEOUT_SECONDS", "60")),
-		CorrelationWindow:    seconds(getenv("CORRELATION_WINDOW_SECONDS", "60")),
-		SlackBotToken:        getenv("SLACK_BOT_TOKEN", ""),
-		SlackSigningSecret:   getenv("SLACK_SIGNING_SECRET", ""),
-		SlackApprovalChannel: getenv("SLACK_APPROVAL_CHANNEL", "#sre-approvals"),
-		HTTPAddr:             getenv("BACKEND_HTTP_ADDR", ":8080"),
-		MCPExecuteAddr:       getenv("MCP_EXECUTE_ADDR", ":8090"),
-		MCPExecuteToken:      getenv("MCP_EXECUTE_TOKEN", ""),
-		MCPExecuteURL:        getenv("MCP_EXECUTE_URL", "http://localhost:8090"),
+		DatabaseURL:                getenv("DATABASE_URL", ""),
+		Kubeconfig:                 getenv("KUBECONFIG", ""),
+		Mode:                       gate.Mode(getenv("REMEDIATION_MODE", "manual")),
+		VerifyTimeout:              seconds(getenv("VERIFY_TIMEOUT_SECONDS", "60")),
+		CorrelationWindow:          seconds(getenv("CORRELATION_WINDOW_SECONDS", "60")),
+		SlackBotToken:              getenv("SLACK_BOT_TOKEN", ""),
+		SlackSigningSecret:         getenv("SLACK_SIGNING_SECRET", ""),
+		SlackApprovalChannel:       getenv("SLACK_APPROVAL_CHANNEL", "#sre-approvals"),
+		HTTPAddr:                   getenv("BACKEND_HTTP_ADDR", ":8080"),
+		MCPExecuteAddr:             getenv("MCP_EXECUTE_ADDR", ":8090"),
+		MCPExecuteToken:            getenv("MCP_EXECUTE_TOKEN", ""),
+		MCPExecuteURL:              getenv("MCP_EXECUTE_URL", "http://localhost:8090"),
+		MCPReadonlyAddr:            getenv("MCP_READONLY_ADDR", ":8091"),
+		MCPReadonlyToken:           getenv("MCP_READONLY_TOKEN", ""),
+		NATSURL:                    getenv("NATS_URL", ""),
+		DiagnosisCallbackToken:     getenv("DIAGNOSIS_CALLBACK_TOKEN", ""),
+		PixieEnabled:               getenv("PIXIE_ENABLED", "false") == "true",
+		PixieConnMode:              getenv("PIXIE_CONN_MODE", ""),
+		PixieVizierAddr:            getenv("PIXIE_VIZIER_ADDR", ""),
+		PixieAPIKey:                getenv("PIXIE_API_KEY", ""),
+		PixieClusterID:             getenv("PIXIE_CLUSTER_ID", ""),
+		PixieInsecureSkipTLSVerify: getenv("PIXIE_INSECURE_SKIP_TLS_VERIFY", "false") == "true",
 	}
 	if err := s.Validate(); err != nil {
 		slog.Error("invalid settings", "error", err)
@@ -74,8 +94,33 @@ func (s Settings) Validate() error {
 	if s.MCPExecuteToken == "" {
 		missing = append(missing, "MCP_EXECUTE_TOKEN")
 	}
+	if s.MCPReadonlyToken == "" {
+		missing = append(missing, "MCP_READONLY_TOKEN")
+	}
+	if s.NATSURL == "" {
+		missing = append(missing, "NATS_URL")
+	}
+	if s.DiagnosisCallbackToken == "" {
+		missing = append(missing, "DIAGNOSIS_CALLBACK_TOKEN")
+	}
 	if s.Mode != gate.ModeAuto && s.Mode != gate.ModeManual {
 		missing = append(missing, "REMEDIATION_MODE (invalid value)")
+	}
+	if s.PixieEnabled {
+		if s.PixieConnMode != "direct" && s.PixieConnMode != "cloud" {
+			missing = append(missing, "PIXIE_CONN_MODE")
+		}
+		if s.PixieVizierAddr == "" {
+			missing = append(missing, "PIXIE_VIZIER_ADDR")
+		}
+		if s.PixieConnMode == "cloud" {
+			if s.PixieAPIKey == "" {
+				missing = append(missing, "PIXIE_API_KEY")
+			}
+			if s.PixieClusterID == "" {
+				missing = append(missing, "PIXIE_CLUSTER_ID")
+			}
+		}
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))

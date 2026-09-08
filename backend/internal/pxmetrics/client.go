@@ -4,6 +4,7 @@ package pxmetrics
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -16,10 +17,11 @@ import (
 // the client's perspective they're the same wire protocol, just a different
 // VizierAddr (see docs/superpowers/specs/2026-08-12-pixie-observability-design.md §3).
 type Config struct {
-	ConnMode   string // "direct" | "cloud"
-	VizierAddr string
-	APIKey     string // required when ConnMode == "cloud"
-	ClusterID  string // required when ConnMode == "cloud"
+	ConnMode              string // "direct" | "cloud"
+	VizierAddr            string
+	APIKey                string // cloud: required. direct: optional bearer token — if empty, connects unauthenticated
+	ClusterID             string // required when ConnMode == "cloud"
+	InsecureSkipTLSVerify bool   // cloud only — for self-hosted Pixie Cloud using a self-signed/local CA (e.g. mkcert) this process doesn't trust by default
 }
 
 type Client struct {
@@ -35,12 +37,49 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	var opts []pxapi.ClientOption
 	switch cfg.ConnMode {
 	case "direct":
-		opts = []pxapi.ClientOption{pxapi.WithDirectAddr(cfg.VizierAddr), pxapi.WithDirectCredsInsecure()}
+		opts = []pxapi.ClientOption{pxapi.WithDirectAddr(cfg.VizierAddr)}
+		if cfg.APIKey != "" {
+			opts = append(opts, pxapi.WithBearerAuth(cfg.APIKey))
+		} else {
+			opts = append(opts, pxapi.WithDirectCredsInsecure())
+		}
 	case "cloud":
 		if cfg.APIKey == "" || cfg.ClusterID == "" {
 			return nil, fmt.Errorf("pxmetrics: cloud connMode requires both APIKey and ClusterID")
 		}
 		opts = []pxapi.ClientOption{pxapi.WithCloudAddr(cfg.VizierAddr), pxapi.WithAPIKey(cfg.APIKey)}
+		if cfg.InsecureSkipTLSVerify {
+			// pxapi.WithDisableTLSVerification's real behavior, confirmed by
+			// reading px.dev/pxapi@v0.5.0/opts.go directly (go doc's
+			// rendered signature — func WithDisableTLSVerification(cloudAddr
+			// string) ClientOption — doesn't show this): it does NOT
+			// unconditionally disable certificate verification. It only
+			// sets disableTLSVerification=true when (a) cloudAddr contains
+			// the literal substring "cluster.local" AND (b) the
+			// PX_DISABLE_TLS process env var is exactly "1"; otherwise it's
+			// a no-op (verification stays on), and if cloudAddr contains
+			// "cluster.local" while PX_DISABLE_TLS isn't "1" it calls
+			// log.Fatalf, hard-crashing the process. We set PX_DISABLE_TLS=1
+			// ourselves so that gate is always satisfied and the Fatalf
+			// branch can never trigger.
+			//
+			// KNOWN LIMITATION: this means InsecureSkipTLSVerify only
+			// actually takes effect when VizierAddr is a
+			// "*cluster.local*"-style internal address. For
+			// helm/README.md's documented self-hosted Pixie Cloud setup
+			// (mkcert against a real external-looking domain, not
+			// cluster.local), this option is a silent no-op and TLS
+			// verification stays on — pxapi v0.5.0 exposes no general
+			// "skip verification for any address" option (confirmed: the
+			// full ClientOption list is WithAPIKey, WithBearerAuth,
+			// WithCloudAddr, WithDirectAddr, WithDirectCredsInsecure,
+			// WithDisableTLSVerification, WithE2EEncryption — no custom
+			// CA/TLS config or grpc.DialOption escape hatch exists). See
+			// final-review-fix-report.md Fix 5 for the full go doc /
+			// source-reading transcript.
+			os.Setenv("PX_DISABLE_TLS", "1")
+			opts = append(opts, pxapi.WithDisableTLSVerification(cfg.VizierAddr))
+		}
 	default:
 		return nil, fmt.Errorf("pxmetrics: unknown ConnMode %q: must be \"direct\" or \"cloud\"", cfg.ConnMode)
 	}
@@ -74,6 +113,27 @@ type TrafficSample struct {
 // lookback shouldn't be able to blow up the LLM's context with an
 // unbounded time series.
 const maxSamples = 20
+
+// maxLookback bounds how far back a query can look — prevents a
+// pathological LLM-supplied value from producing a huge lookback that
+// would otherwise force silent sample truncation, and guards against the
+// int64-nanosecond-overflow risk of multiplying an unbounded
+// LookbackSeconds into a time.Duration in main.go.
+const maxLookback = 24 * time.Hour
+
+// windowSecondsFor picks a bucket width wide enough that the full lookback
+// fits within maxSamples buckets, so the two query methods below don't
+// have to silently drop data the way a fixed 60s window would for any
+// lookback beyond maxSamples minutes. Stays at the original 60s default
+// for any lookback that already fits (≤ 20 minutes), so short-lookback
+// callers see identical behavior to before this fix.
+func windowSecondsFor(lookback time.Duration) int {
+	w := int(lookback.Seconds()) / maxSamples
+	if w < 60 {
+		return 60
+	}
+	return w
+}
 
 // columnRecordHandler adapts pxapi's per-record callback style into a
 // simple "read named columns as strings" interface, using types.Datum's
@@ -163,20 +223,25 @@ func (c *Client) runCollectingScript(ctx context.Context, script string, onRecor
 // see the Prerequisite section. Treat running this against a real Vizier as
 // a required manual step before trusting it in production, same precedent
 // introspect_test.go already sets for GetPodLogs.
-func (c *Client) GetPodCPUUsage(ctx context.Context, namespace, name string, lookback time.Duration) ([]CPUSample, error) {
+func (c *Client) GetPodCPUUsage(ctx context.Context, namespace, name string, lookback time.Duration) ([]CPUSample, bool, error) {
 	if lookback <= 0 {
-		return nil, fmt.Errorf("pxmetrics: lookback must be positive, got %s", lookback)
+		return nil, false, fmt.Errorf("pxmetrics: lookback must be positive, got %s", lookback)
 	}
-	script, err := BuildPodCPUScript(namespace, name, lookback, 60)
+	if lookback > maxLookback {
+		lookback = maxLookback
+	}
+	script, err := BuildPodCPUScript(namespace, name, lookback, windowSecondsFor(lookback))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
 	var samples []CPUSample
+	var truncated bool
 	err = c.runCollectingScript(ctx, script, func(col func(string) string) error {
 		if len(samples) >= maxSamples {
+			truncated = true
 			return nil
 		}
 		ts, err := parseTimeDatum(col("time_"))
@@ -191,19 +256,22 @@ func (c *Client) GetPodCPUUsage(ctx context.Context, namespace, name string, loo
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return samples, nil
+	return samples, truncated, nil
 }
 
 // GetPodTrafficStats — same live-verification caveat as GetPodCPUUsage.
-func (c *Client) GetPodTrafficStats(ctx context.Context, namespace, name string, lookback time.Duration) ([]TrafficSample, error) {
+func (c *Client) GetPodTrafficStats(ctx context.Context, namespace, name string, lookback time.Duration) ([]TrafficSample, bool, error) {
 	if lookback <= 0 {
-		return nil, fmt.Errorf("pxmetrics: lookback must be positive, got %s", lookback)
+		return nil, false, fmt.Errorf("pxmetrics: lookback must be positive, got %s", lookback)
 	}
-	script, err := BuildPodTrafficScript(namespace, name, lookback, 60)
+	if lookback > maxLookback {
+		lookback = maxLookback
+	}
+	script, err := BuildPodTrafficScript(namespace, name, lookback, windowSecondsFor(lookback))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
@@ -223,8 +291,10 @@ func (c *Client) GetPodTrafficStats(ctx context.Context, namespace, name string,
 	}
 
 	var samples []TrafficSample
+	var truncated bool
 	err = c.runCollectingScript(ctx, script, func(col func(string) string) error {
 		if len(samples) >= maxSamples {
+			truncated = true
 			return nil
 		}
 		ts, err := parseTimeDatum(col("time_"))
@@ -258,7 +328,7 @@ func (c *Client) GetPodTrafficStats(ctx context.Context, namespace, name string,
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return samples, nil
+	return samples, truncated, nil
 }

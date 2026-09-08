@@ -96,6 +96,30 @@ llm:
   model: ""
   apiKey: ""
 
+langfuse:
+  # Off by default — self-hosted Langfuse is a real out-of-band
+  # infrastructure prerequisite (its own Postgres+ClickHouse+Redis+web
+  # stack), not something this chart installs. See helm/README.md before
+  # setting enabled: true.
+  enabled: false
+  host: ""   # e.g. http://langfuse-web.langfuse.svc.cluster.local:3000
+  promptCacheTtlSeconds: 60
+
+langfusePublicKey: ""
+langfuseSecretKey: ""   # required when langfuse.enabled is true
+
+pxMetrics:
+  # Off by default — Pixie is a real out-of-band infrastructure prerequisite
+  # (self-hosted Pixie Cloud + Vizier), not something this chart installs.
+  # See helm/README.md before setting enabled: true.
+  enabled: false
+  connMode: cloud   # "cloud" | "direct" — "cloud" covers both hosted Community Cloud and self-hosted Pixie Cloud, same wire protocol
+  vizierAddr: ""     # required when enabled — the cloud/Vizier address (host:port)
+  clusterId: ""       # required when enabled && connMode == cloud
+  insecureSkipTLSVerify: false  # for self-hosted Pixie Cloud using a self-signed/local CA (e.g. mkcert) this process doesn't trust by default — see helm/README.md
+
+pixieApiKey: ""        # required when pxMetrics.enabled && pxMetrics.connMode == cloud
+
 remediation:
   # "auto" or "manual" — validated by settings.Load() in the app itself, and
   # checked again here so `helm install`/`helm template` fails fast with a
@@ -115,9 +139,11 @@ mcpExecuteToken: ""
 
 secrets:
   # Name of a pre-existing Secret with keys DATABASE_URL, SLACK_BOT_TOKEN,
-  # SLACK_SIGNING_SECRET, MCP_EXECUTE_TOKEN. When set, the chart's own
-  # secret.yaml is skipped entirely and slack.*/mcpExecuteToken/database
-  # values above are ignored — you own the Secret's lifecycle.
+  # SLACK_SIGNING_SECRET, MCP_EXECUTE_TOKEN, MCP_READONLY_TOKEN,
+  # DIAGNOSIS_CALLBACK_TOKEN, LLM_API_KEY, and (if pxMetrics.enabled with
+  # connMode=cloud) PIXIE_API_KEY. When set, the chart's own secret.yaml is
+  # skipped entirely and slack.*/mcpExecuteToken/database values above are
+  # ignored — you own the Secret's lifecycle.
   existingSecret: ""
 
 postgresql:

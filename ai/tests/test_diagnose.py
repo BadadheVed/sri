@@ -21,7 +21,7 @@ async def test_diagnose_uses_rule_when_available_without_touching_the_model():
     # An empty message iterator would raise if the model were ever invoked —
     # this proves the rule path really does short-circuit before the LLM.
     fake_model = GenericFakeChatModel(messages=iter([]))
-    diagnosis = await diagnose(_incident("CrashLoopBackOff"), fake_model, tools=[])
+    diagnosis = await diagnose(_incident("CrashLoopBackOff"), fake_model, tools=[], prompt_client=None)
     assert diagnosis.failure_mode == "CrashLoopBackOff"
 
 
@@ -29,6 +29,6 @@ async def test_diagnose_falls_back_to_llm_when_no_rule_matches():
     fake_model = GenericFakeChatModel(
         messages=iter([AIMessage(content='{"failure_mode": "SchedulingFailed", "recommended_action": "none", "confidence": 0.5}')])
     )
-    diagnosis = await diagnose(_incident("SchedulingFailed"), fake_model, tools=[])
+    diagnosis = await diagnose(_incident("SchedulingFailed"), fake_model, tools=[], prompt_client=None)
     assert diagnosis.failure_mode == "SchedulingFailed"
     assert diagnosis.recommended_action == "none"

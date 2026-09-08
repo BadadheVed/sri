@@ -48,7 +48,7 @@ async def test_investigate_returns_diagnosis_from_fake_model_final_answer():
         messages=iter([AIMessage(content='{"failure_mode": "ImagePullError", "recommended_action": "none", "confidence": 0.8}')])
     )
 
-    diagnosis = await investigate(incident, fake_model, tools=[])
+    diagnosis = await investigate(incident, fake_model, tools=[], prompt_client=None)
 
     assert diagnosis.failure_mode == "ImagePullError"
     assert diagnosis.recommended_action == "none"

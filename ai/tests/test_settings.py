@@ -29,3 +29,34 @@ def test_settings_loads_from_environment(monkeypatch):
     assert settings.nats_url == "nats://localhost:4222"
     assert settings.llm_provider == "anthropic"
     assert settings.llm_model == "claude-sonnet-4-5"
+
+
+def test_settings_langfuse_defaults_to_disabled():
+    s = Settings(
+        nats_url="n", backend_callback_url="b", diagnosis_callback_token="d",
+        mcp_readonly_url="m", mcp_readonly_token="t",
+        llm_provider="anthropic", llm_api_key="k", llm_model="claude-sonnet-4-5",
+    )
+    assert s.langfuse_enabled is False
+    assert s.langfuse_host == ""
+    assert s.langfuse_prompt_cache_ttl_seconds == 60
+
+
+def test_settings_langfuse_overrides_from_environment(monkeypatch):
+    for key, val in {
+        "NATS_URL": "n", "BACKEND_CALLBACK_URL": "b", "DIAGNOSIS_CALLBACK_TOKEN": "d",
+        "MCP_READONLY_URL": "m", "MCP_READONLY_TOKEN": "t",
+        "LLM_PROVIDER": "anthropic", "LLM_API_KEY": "k", "LLM_MODEL": "claude-sonnet-4-5",
+        "LANGFUSE_ENABLED": "true", "LANGFUSE_HOST": "http://langfuse:3000",
+        "LANGFUSE_PUBLIC_KEY": "pk-1", "LANGFUSE_SECRET_KEY": "sk-1",
+        "LANGFUSE_PROMPT_CACHE_TTL_SECONDS": "120",
+    }.items():
+        monkeypatch.setenv(key, val)
+
+    s = Settings()
+
+    assert s.langfuse_enabled is True
+    assert s.langfuse_host == "http://langfuse:3000"
+    assert s.langfuse_public_key == "pk-1"
+    assert s.langfuse_secret_key == "sk-1"
+    assert s.langfuse_prompt_cache_ttl_seconds == 120

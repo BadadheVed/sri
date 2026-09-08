@@ -126,6 +126,20 @@ fail-closed rule gate.Evaluate itself enforces in Go.
 {{- end -}}
 
 {{/*
+Same enum-validation pattern as sage.validatedMode, for
+pxMetrics.connMode — only called when pxMetrics.enabled is true (see
+configmap.yaml), matching settings.go's own conditional validation, which
+doesn't check connMode at all when Pixie is disabled.
+*/}}
+{{- define "sage.validatedPixieConnMode" -}}
+{{- if or (eq .Values.pxMetrics.connMode "direct") (eq .Values.pxMetrics.connMode "cloud") -}}
+{{- .Values.pxMetrics.connMode -}}
+{{- else -}}
+{{- fail (printf "pxMetrics.connMode must be exactly \"direct\" or \"cloud\", got %q" .Values.pxMetrics.connMode) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 In-cluster URL of the MCP execute server — the value backend/ uses to reach
 it. ClusterIP-only, never exposed externally (see templates/service-mcp-execute.yaml).
 */}}

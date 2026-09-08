@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     llm_api_key: str
     llm_model: str
 
+    langfuse_enabled: bool = False
+    langfuse_host: str = ""
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_prompt_cache_ttl_seconds: int = 60
+
 
 def load_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]  # fields are populated from the environment by pydantic-settings

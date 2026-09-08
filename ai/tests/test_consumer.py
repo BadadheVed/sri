@@ -25,9 +25,10 @@ async def test_handle_message_diagnoses_and_posts_back():
     data = incident.model_dump_json().encode()
 
     with patch("ai.consumer.post_diagnosis", new=AsyncMock()) as mock_post:
-        # model=None, tools=[] is safe here: CrashLoopBackOff matches a
-        # rule in ai.analyzers, so diagnose() never touches the model.
-        await handle_message(data, _settings(), model=None, tools=[])
+        # model=None, tools=[], prompt_client=None is safe here: CrashLoopBackOff
+        # matches a rule in ai.analyzers, so diagnose() never touches the
+        # model or Langfuse.
+        await handle_message(data, _settings(), model=None, tools=[], prompt_client=None)
 
     mock_post.assert_awaited_once()
     call_args = mock_post.call_args.args

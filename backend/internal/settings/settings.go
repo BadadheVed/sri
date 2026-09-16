@@ -39,6 +39,11 @@ type Settings struct {
 	PixieAPIKey                string
 	PixieClusterID             string
 	PixieInsecureSkipTLSVerify bool
+	MetricsPollInterval        time.Duration
+	BeylaEnabled               bool
+	BeylaPodSelector           string
+	BeylaNamespace             string
+	BeylaPort                  int
 }
 
 // Load reads Settings from the process environment and fails fast — the
@@ -69,6 +74,11 @@ func Load() Settings {
 		PixieAPIKey:                getenv("PIXIE_API_KEY", ""),
 		PixieClusterID:             getenv("PIXIE_CLUSTER_ID", ""),
 		PixieInsecureSkipTLSVerify: getenv("PIXIE_INSECURE_SKIP_TLS_VERIFY", "false") == "true",
+		MetricsPollInterval:        seconds(getenv("METRICS_POLL_INTERVAL_SECONDS", "15")),
+		BeylaEnabled:               getenv("BEYLA_ENABLED", "false") == "true",
+		BeylaPodSelector:           getenv("BEYLA_POD_SELECTOR", ""),
+		BeylaNamespace:             getenv("BEYLA_NAMESPACE", ""),
+		BeylaPort:                  atoi(getenv("BEYLA_PORT", "0")),
 	}
 	if err := s.Validate(); err != nil {
 		slog.Error("invalid settings", "error", err)
@@ -122,6 +132,14 @@ func (s Settings) Validate() error {
 			}
 		}
 	}
+	if s.BeylaEnabled {
+		if s.BeylaPodSelector == "" {
+			missing = append(missing, "BEYLA_POD_SELECTOR")
+		}
+		if s.BeylaPort <= 0 {
+			missing = append(missing, "BEYLA_PORT")
+		}
+	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
 	}
@@ -141,4 +159,12 @@ func seconds(s string) time.Duration {
 		return 60 * time.Second
 	}
 	return time.Duration(n) * time.Second
+}
+
+func atoi(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
 }

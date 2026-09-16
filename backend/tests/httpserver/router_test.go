@@ -8,9 +8,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
 
 	"sre-platform/backend/internal/analyze"
+	"sre-platform/backend/internal/histogramquantile"
 	"sre-platform/backend/internal/httpserver"
+	"sre-platform/backend/internal/metricsagg"
 	"sre-platform/backend/internal/slackapproval"
 	"sre-platform/backend/internal/store"
 )
@@ -33,10 +38,15 @@ func (f *fakeDiagnosisReceiver) OnDiagnosis(ctx context.Context, incidentID stri
 }
 
 const testDiagnosisToken = "diagnosis-test-token"
+const testMCPReadonlyToken = "mcp-readonly-test-token"
+
+func newTestRouter(slackClient *slackapproval.Client, s store.Store, receiver httpserver.DiagnosisReceiver) http.Handler {
+	return httpserver.NewRouter(slackClient, s, receiver, testDiagnosisToken, httpserver.NewMetricsHub(), testMCPReadonlyToken)
+}
 
 func TestNewRouter_HealthzReturnsOK(t *testing.T) {
 	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
-	router := httpserver.NewRouter(slackClient, store.NewMemoryStore(), &fakeDiagnosisReceiver{}, testDiagnosisToken)
+	router := newTestRouter(slackClient, store.NewMemoryStore(), &fakeDiagnosisReceiver{})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -49,7 +59,7 @@ func TestNewRouter_HealthzReturnsOK(t *testing.T) {
 
 func TestNewRouter_RoutesSlackInteractionsUnderPrefix(t *testing.T) {
 	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
-	router := httpserver.NewRouter(slackClient, store.NewMemoryStore(), &fakeDiagnosisReceiver{}, testDiagnosisToken)
+	router := newTestRouter(slackClient, store.NewMemoryStore(), &fakeDiagnosisReceiver{})
 
 	req := httptest.NewRequest(http.MethodPost, "/slack/interactions", nil)
 	rec := httptest.NewRecorder()
@@ -63,7 +73,7 @@ func TestNewRouter_RoutesSlackInteractionsUnderPrefix(t *testing.T) {
 func TestNewRouter_DiagnosisCallback_ValidRequestInvokesReceiver(t *testing.T) {
 	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
 	receiver := &fakeDiagnosisReceiver{}
-	router := httpserver.NewRouter(slackClient, store.NewMemoryStore(), receiver, testDiagnosisToken)
+	router := newTestRouter(slackClient, store.NewMemoryStore(), receiver)
 
 	body := `{"failure_mode":"CrashLoopBackOff","recommended_action":"restart_pod","confidence":0.9}`
 	req := httptest.NewRequest(http.MethodPost, "/internal/incidents/incident-1/diagnosis", strings.NewReader(body))
@@ -88,7 +98,7 @@ func TestNewRouter_DiagnosisCallback_ValidRequestInvokesReceiver(t *testing.T) {
 func TestNewRouter_DiagnosisCallback_MissingTokenRejected(t *testing.T) {
 	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
 	receiver := &fakeDiagnosisReceiver{}
-	router := httpserver.NewRouter(slackClient, store.NewMemoryStore(), receiver, testDiagnosisToken)
+	router := newTestRouter(slackClient, store.NewMemoryStore(), receiver)
 
 	body := `{"failure_mode":"CrashLoopBackOff","recommended_action":"restart_pod","confidence":0.9}`
 	req := httptest.NewRequest(http.MethodPost, "/internal/incidents/incident-1/diagnosis", strings.NewReader(body))
@@ -106,7 +116,7 @@ func TestNewRouter_DiagnosisCallback_MissingTokenRejected(t *testing.T) {
 func TestNewRouter_DiagnosisCallback_RejectsOutOfVocabularyAction(t *testing.T) {
 	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
 	receiver := &fakeDiagnosisReceiver{}
-	router := httpserver.NewRouter(slackClient, store.NewMemoryStore(), receiver, testDiagnosisToken)
+	router := newTestRouter(slackClient, store.NewMemoryStore(), receiver)
 
 	body := `{"failure_mode":"OOMKilled","recommended_action":"scale_up","confidence":0.7}`
 	req := httptest.NewRequest(http.MethodPost, "/internal/incidents/incident-1/diagnosis", strings.NewReader(body))
@@ -132,7 +142,7 @@ func TestNewRouter_DiagnosisCallback_RejectsOutOfVocabularyAction(t *testing.T) 
 func TestNewRouter_DiagnosisCallback_ReceiverContextSurvivesClientCancellation(t *testing.T) {
 	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
 	receiver := &fakeDiagnosisReceiver{}
-	router := httpserver.NewRouter(slackClient, store.NewMemoryStore(), receiver, testDiagnosisToken)
+	router := newTestRouter(slackClient, store.NewMemoryStore(), receiver)
 
 	body := `{"failure_mode":"CrashLoopBackOff","recommended_action":"restart_pod","confidence":0.9}`
 	req := httptest.NewRequest(http.MethodPost, "/internal/incidents/incident-1/diagnosis", strings.NewReader(body))
@@ -150,5 +160,49 @@ func TestNewRouter_DiagnosisCallback_ReceiverContextSurvivesClientCancellation(t
 	}
 	if receiver.receivedCtx.Err() != nil {
 		t.Fatalf("expected the context OnDiagnosis received to NOT be canceled (context.WithoutCancel should strip client cancellation), got err: %v", receiver.receivedCtx.Err())
+	}
+}
+
+func TestNewRouter_MetricsWS_MissingTokenRejected(t *testing.T) {
+	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
+	hub := httpserver.NewMetricsHub()
+	router := httpserver.NewRouter(slackClient, store.NewMemoryStore(), &fakeDiagnosisReceiver{}, testDiagnosisToken, hub, testMCPReadonlyToken)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL(server)+"/ws/metrics", nil)
+	if err == nil {
+		t.Fatal("expected Dial to fail without a bearer token")
+	}
+	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 handshake response, got %+v (err=%v)", resp, err)
+	}
+}
+
+func TestNewRouter_MetricsWS_ValidTokenUpgradesAndReceivesPublishedResults(t *testing.T) {
+	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
+	hub := httpserver.NewMetricsHub()
+	router := httpserver.NewRouter(slackClient, store.NewMemoryStore(), &fakeDiagnosisReceiver{}, testDiagnosisToken, hub, testMCPReadonlyToken)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	header := http.Header{"Authorization": {"Bearer " + testMCPReadonlyToken}}
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL(server)+"/ws/metrics", header)
+	if err != nil {
+		t.Fatalf("Dial: %v (status %v)", err, resp)
+	}
+	defer conn.Close()
+	waitForClientCount(t, hub, 1)
+
+	hub.Publish(metricsagg.SeriesKey{Namespace: "prod", Service: "api", Route: "/x", Method: "GET"},
+		histogramquantile.Result{Quantiles: map[float64]float64{0.5: 5}, RequestsPerSecond: 1})
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var got map[string]any
+	if err := conn.ReadJSON(&got); err != nil {
+		t.Fatalf("ReadJSON: %v", err)
+	}
+	if got["route"] != "/x" {
+		t.Errorf("got %+v, want route=/x", got)
 	}
 }

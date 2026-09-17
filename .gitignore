@@ -1,9 +1,12 @@
 .env
-*superpowers*
+# Plugin-local state only — docs/superpowers/ (specs, plans) is real
+# project documentation and must stay tracked, so this can't be a bare
+# "*superpowers*" glob.
+/.superpowers
 .claude
 .vscode
 .gemini
-
+*superpowers/*
 # Environments
 .env.local
 *.env

@@ -1,0 +1,19 @@
+# Unlike mcp-execute-server's Service, this one legitimately only needs to
+# be reachable from inside the cluster (by ai/) — same ClusterIP-only
+# reasoning, lower stakes (nothing here can mutate anything), so no
+# service.type knob here either, for the same reason.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sage.mcpReadonly.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.mcpReadonly.selectorLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.mcpReadonly.port }}
+      targetPort: http
+  selector:
+    {{- include "sage.mcpReadonly.selectorLabels" . | nindent 4 }}

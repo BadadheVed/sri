@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sage.mcpReadonly.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.mcpReadonly.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.mcpReadonly.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "sage.mcpReadonly.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sage.mcpReadonly.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.mcpReadonly.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "sage.mcpReadonly.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+      containers:
+        - name: mcp-readonly-server
+          image: "{{ .Values.mcpReadonly.image.repository }}:{{ .Values.mcpReadonly.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.mcpReadonly.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mcpReadonly.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "sage.fullname" . }}-config
+            - secretRef:
+                name: {{ include "sage.secretName" . }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          {{- with .Values.mcpReadonly.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.mcpReadonly.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mcpReadonly.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mcpReadonly.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

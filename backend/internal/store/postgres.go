@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,14 +21,28 @@ func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 	return &PostgresStore{pool: pool}, nil
 }
 
-func (s *PostgresStore) CreateIncident(ctx context.Context, namespace, kind, name, failureMode string, firstSeen, lastSeen time.Time) (string, error) {
+func (s *PostgresStore) CreatePendingIncident(ctx context.Context, namespace, kind, name string, firstSeen, lastSeen time.Time) (string, error) {
 	var id string
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO incidents (namespace, kind, name, failure_mode, first_seen, last_seen)
-		 VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-		namespace, kind, name, failureMode, firstSeen, lastSeen,
+		`INSERT INTO incidents (namespace, kind, name, status, first_seen, last_seen)
+		 VALUES ($1,$2,$3,'pending_diagnosis',$4,$5) RETURNING id`,
+		namespace, kind, name, firstSeen, lastSeen,
 	).Scan(&id)
 	return id, err
+}
+
+func (s *PostgresStore) RecordDiagnosis(ctx context.Context, incidentID, failureMode string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE incidents SET failure_mode = $2, status = 'diagnosed' WHERE id = $1`,
+		incidentID, failureMode,
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("unknown incident id %q", incidentID)
+	}
+	return nil
 }
 
 func (s *PostgresStore) CreateRemediationAction(ctx context.Context, incidentID, actionType string, requiresApproval bool, reason string) (string, error) {
@@ -73,6 +88,14 @@ func (s *PostgresStore) WriteAudit(ctx context.Context, incidentID, eventType st
 	_, err = s.pool.Exec(ctx,
 		`INSERT INTO audit_log (incident_id, event_type, detail) VALUES ($1,$2,$3)`,
 		incidentID, eventType, raw,
+	)
+	return err
+}
+
+func (s *PostgresStore) CreateDeadLetterDispatch(ctx context.Context, incidentID, namespace, kind, name, reason string, attempts int) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO dead_letter_dispatches (incident_id, namespace, kind, name, reason, attempts) VALUES ($1,$2,$3,$4,$5,$6)`,
+		incidentID, namespace, kind, name, reason, attempts,
 	)
 	return err
 }

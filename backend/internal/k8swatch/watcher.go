@@ -4,6 +4,7 @@ package k8swatch
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -18,8 +19,15 @@ import (
 // knownReasons maps a K8s Event's Reason field to our internal failure-mode
 // taxonomy. Kubernetes itself emits "BackOff" (not "CrashLoopBackOff") for a
 // crash-looping container; the pod status condition uses the longer name.
+//
+// "Failed" is deliberately not in this map: kubelet reuses that one Reason
+// for many unrelated failures (image pull errors, missing secrets/configmaps,
+// volume mount failures, ...), so it's handled separately below by
+// inspecting the event Message instead of trusting Reason alone.
 var knownReasons = map[string]string{
-	"BackOff": "CrashLoopBackOff",
+	"BackOff":          "CrashLoopBackOff",
+	"FailedScheduling": "SchedulingFailed",
+	"Unhealthy":        "ProbeFailure",
 }
 
 type Watcher struct {
@@ -53,6 +61,9 @@ func (w *Watcher) HandleAddEvent(obj any) {
 		return
 	}
 	failureMode, known := knownReasons[ev.Reason]
+	if !known && ev.Reason == "Failed" && strings.Contains(ev.Message, "pull image") {
+		failureMode, known = "ImagePullError", true
+	}
 	if !known || ev.InvolvedObject.Kind != "Pod" {
 		return
 	}

@@ -1,28 +1,12 @@
+// Diagnosis is produced by ai/ (see docs/superpowers/specs/2026-08-08-ai-diagnosis-service-design.md)
+// and delivered to backend/ over the HTTP callback in httpserver.NewRouter's
+// diagnosis route. This package now holds only that wire-format shape — the
+// analyzers that used to live here (CrashLoopAnalyzer) were ported to
+// ai/ai/analyzers/.
 package analyze
-
-import "sre-platform/backend/internal/correlate"
 
 type Diagnosis struct {
 	FailureMode       string
 	RecommendedAction string
 	Confidence        float64
-}
-
-type Analyzer interface {
-	Analyze(inc correlate.Incident) (*Diagnosis, bool)
-}
-
-type CrashLoopAnalyzer struct{}
-
-func (CrashLoopAnalyzer) Analyze(inc correlate.Incident) (*Diagnosis, bool) {
-	for _, s := range inc.Signals {
-		if s.Type == "CrashLoopBackOff" {
-			return &Diagnosis{
-				FailureMode:       "CrashLoopBackOff",
-				RecommendedAction: "restart_pod",
-				Confidence:        0.9,
-			}, true
-		}
-	}
-	return nil, false
 }

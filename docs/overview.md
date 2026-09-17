@@ -36,5 +36,5 @@ An autonomous SRE platform for generic Kubernetes clusters that **detects, diagn
 
 ## Tech stack
 
-Go (backend/execution) · Python + LangGraph (ai/diagnosis) · Next.js (dashboard) · Postgres + Qdrant (knowledge store) · Slack (approvals) · MCP (tool interface) · Grafana Beyla/Pixie + OTel (dependency graph, mesh-agnostic) · NATS JetStream (introduced when scaling beyond a single cluster).
+Go (backend/execution) · Python + LangGraph (ai/diagnosis) · Next.js (dashboard) · Postgres + Qdrant (knowledge store) · Slack (approvals) · MCP (tool interface) · Grafana Beyla + OTel (dependency graph, mesh-agnostic) · NATS JetStream (introduced when scaling beyond a single cluster).
 

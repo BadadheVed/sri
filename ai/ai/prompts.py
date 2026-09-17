@@ -73,8 +73,8 @@ class PromptClient:
 
 def get_prompt_client(settings: Settings) -> PromptClient | None:
     """None when Langfuse is disabled (LANGFUSE_ENABLED=false, the
-    default) — same explicit opt-in gate this repo already uses for Pixie
-    (PIXIE_ENABLED). No client is constructed in that case, so there's no
+    default) — same explicit opt-in gate this repo already uses for Beyla
+    (BEYLA_ENABLED). No client is constructed in that case, so there's no
     risk of the SDK doing anything (network, validation) against blank
     credentials."""
     if not settings.langfuse_enabled:

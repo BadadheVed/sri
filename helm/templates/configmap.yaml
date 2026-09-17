@@ -25,13 +25,6 @@ data:
   LANGFUSE_PUBLIC_KEY: {{ required "langfusePublicKey is required when langfuse.enabled is true" .Values.langfusePublicKey | quote }}
   LANGFUSE_PROMPT_CACHE_TTL_SECONDS: {{ .Values.langfuse.promptCacheTtlSeconds | quote }}
   {{- end }}
-  PIXIE_ENABLED: {{ .Values.pxMetrics.enabled | quote }}
-  {{- if .Values.pxMetrics.enabled }}
-  PIXIE_CONN_MODE: {{ include "sage.validatedPixieConnMode" . | quote }}
-  PIXIE_VIZIER_ADDR: {{ required "pxMetrics.vizierAddr is required when pxMetrics.enabled is true" .Values.pxMetrics.vizierAddr | quote }}
-  PIXIE_CLUSTER_ID: {{ .Values.pxMetrics.clusterId | quote }}
-  PIXIE_INSECURE_SKIP_TLS_VERIFY: {{ .Values.pxMetrics.insecureSkipTLSVerify | quote }}
-  {{- end }}
   # KUBECONFIG is deliberately never set here. Leaving it unset is what makes
   # client-go fall back to in-cluster config automatically (it reads the
   # ServiceAccount token/CA cert Kubernetes already mounts into the pod) —

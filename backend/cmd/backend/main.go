@@ -58,10 +58,11 @@ func main() {
 
 	// metricsHub fans out live latency/throughput to WebSocket clients; the
 	// Aggregator publishes into it. Source is beylascrape.NewSource when a
-	// Beyla deployment has been configured (cfg.BeylaEnabled), matching
-	// the same "off by default, real infra prerequisite" pattern as Pixie
-	// — otherwise NoopSource, so every poll reports zero series but the
-	// hub/route/ws pipeline still runs end-to-end.
+	// Beyla deployment has been configured (cfg.BeylaEnabled) — off by
+	// default, since Beyla is a real out-of-band infra prerequisite this
+	// backend doesn't deploy itself — otherwise NoopSource, so every poll
+	// reports zero series but the hub/route/ws pipeline still runs
+	// end-to-end.
 	var metricsSource metricsagg.Source = metricsagg.NoopSource{}
 	if cfg.BeylaEnabled {
 		metricsSource = beylascrape.NewSource(clientset, http.DefaultClient, beylascrape.Config{

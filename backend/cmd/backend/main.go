@@ -54,7 +54,7 @@ func main() {
 	}
 
 	reconciler := reconcile.New(pgStore, restarter, publisher, slackClient, clientset, cfg.Mode, cfg.CorrelationWindow, cfg.VerifyTimeout)
-	watcher := k8swatch.NewWatcher(clientset, func(s signal.Signal) { reconciler.OnSignal(ctx, s) })
+	watcher := k8swatch.NewWatcher(clientset, func(s signal.Signal) { reconciler.OnSignal(ctx, s) }, cfg.SelfNamespace)
 
 	// metricsHub fans out live latency/throughput to WebSocket clients; the
 	// Aggregator publishes into it. Source is beylascrape.NewSource when a

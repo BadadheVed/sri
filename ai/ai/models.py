@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -45,5 +46,6 @@ class Diagnosis(BaseModel):
     decodes on POST /internal/incidents/{id}/diagnosis."""
 
     failure_mode: str
-    recommended_action: str  # constrained to "restart_pod" | "none" by ai/diagnose.py and investigate.py — see Global Constraints
+    recommended_action: str  # constrained to the vocabulary in analyze.ValidActions by investigate.py
     confidence: float
+    action_params: dict[str, Any] = Field(default_factory=dict)

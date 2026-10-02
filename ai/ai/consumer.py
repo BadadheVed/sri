@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 import nats
+from langchain_core.exceptions import ModelError
 from nats.js.api import AckPolicy, ConsumerConfig
 
 from ai.callback import post_diagnosis
@@ -46,8 +47,27 @@ async def run(settings: Settings, model, tools, prompt_client: PromptClient | No
         except TimeoutError:
             continue
         for msg in msgs:
-            await handle_message(msg.data, settings, model, tools, prompt_client)
-            await msg.ack()
+            await _process_message(msg, settings, model, tools, prompt_client)
+
+
+async def _process_message(msg, settings: Settings, model, tools, prompt_client: PromptClient | None) -> None:
+    """Handles one message, then acks on success. A retryable ModelError —
+    the LLM provider itself failing transiently (rate limit, 5xx/overload,
+    timeout, connection) — is logged as one concise line and the message is
+    left unacked, so JetStream redelivers it after ack_wait without this
+    process ever crashing or printing a full traceback for an expected,
+    recoverable provider hiccup. Anything else (a non-retryable ModelError,
+    or a genuine bug) still propagates and crashes the process — this
+    module's existing crash-and-redeliver philosophy, preserved for
+    failures that aren't just "the provider was briefly unavailable"."""
+    try:
+        await handle_message(msg.data, settings, model, tools, prompt_client)
+    except ModelError as e:
+        logger.error("model call failed (retryable=%s): %s", e.is_retryable, e)
+        if not e.is_retryable:
+            raise
+        return
+    await msg.ack()
 
 
 async def handle_message(data: bytes, settings: Settings, model, tools, prompt_client: PromptClient | None) -> None:

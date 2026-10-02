@@ -22,9 +22,54 @@ def test_parse_diagnosis_falls_back_safely_on_unparseable_text():
 
 
 def test_parse_diagnosis_rejects_out_of_vocabulary_action():
+    # "scale_up" is deliberately not one of the valid action names (the
+    # valid one is "scale_deployment") — this must still clamp to "none".
     text = '{"failure_mode": "X", "recommended_action": "scale_up", "confidence": 0.9}'
     diagnosis = _parse_diagnosis(text)
     assert diagnosis.recommended_action == "none"
+
+
+def test_parse_diagnosis_accepts_scale_deployment_with_valid_replicas():
+    text = '{"failure_mode": "X", "recommended_action": "scale_deployment", "action_params": {"replicas": 3}, "confidence": 0.8}'
+    diagnosis = _parse_diagnosis(text)
+    assert diagnosis.recommended_action == "scale_deployment"
+    assert diagnosis.action_params == {"replicas": 3}
+
+
+def test_parse_diagnosis_clamps_scale_deployment_with_missing_replicas_to_none():
+    text = '{"failure_mode": "X", "recommended_action": "scale_deployment", "action_params": {}, "confidence": 0.8}'
+    diagnosis = _parse_diagnosis(text)
+    assert diagnosis.recommended_action == "none"
+    assert diagnosis.action_params == {}
+
+
+def test_parse_diagnosis_clamps_scale_deployment_with_non_int_replicas_to_none():
+    text = '{"failure_mode": "X", "recommended_action": "scale_deployment", "action_params": {"replicas": "three"}, "confidence": 0.8}'
+    assert _parse_diagnosis(text).recommended_action == "none"
+
+
+def test_parse_diagnosis_clamps_scale_deployment_bool_replicas_to_none():
+    text = '{"failure_mode": "X", "recommended_action": "scale_deployment", "action_params": {"replicas": true}, "confidence": 0.8}'
+    assert _parse_diagnosis(text).recommended_action == "none"
+
+
+def test_parse_diagnosis_accepts_patch_resources_with_memory_limit_only():
+    text = '{"failure_mode": "OOMKilled", "recommended_action": "patch_resources", "action_params": {"memory_limit": "512Mi"}, "confidence": 0.85}'
+    diagnosis = _parse_diagnosis(text)
+    assert diagnosis.recommended_action == "patch_resources"
+    assert diagnosis.action_params == {"memory_limit": "512Mi"}
+
+
+def test_parse_diagnosis_clamps_patch_resources_with_no_limits_to_none():
+    text = '{"failure_mode": "OOMKilled", "recommended_action": "patch_resources", "action_params": {}, "confidence": 0.85}'
+    assert _parse_diagnosis(text).recommended_action == "none"
+
+
+def test_parse_diagnosis_accepts_rollback_deployment_with_empty_params():
+    text = '{"failure_mode": "BadRollout", "recommended_action": "rollback_deployment", "confidence": 0.75}'  # note: no action_params key at all
+    diagnosis = _parse_diagnosis(text)
+    assert diagnosis.recommended_action == "rollback_deployment"
+    assert diagnosis.action_params == {}
 
 
 def test_parse_diagnosis_falls_back_safely_on_non_string_content():

@@ -9,4 +9,5 @@ type Diagnosis struct {
 	FailureMode       string
 	RecommendedAction string
 	Confidence        float64
+	ActionParams      map[string]any
 }

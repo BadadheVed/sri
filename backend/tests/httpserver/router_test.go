@@ -132,6 +132,89 @@ func TestNewRouter_DiagnosisCallback_RejectsOutOfVocabularyAction(t *testing.T) 
 	}
 }
 
+func TestNewRouter_DiagnosisCallback_AcceptsScaleDeploymentWithActionParams(t *testing.T) {
+	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
+	receiver := &fakeDiagnosisReceiver{}
+	router := newTestRouter(slackClient, store.NewMemoryStore(), receiver)
+
+	body := `{"failure_mode":"OOMKilled","recommended_action":"scale_deployment","action_params":{"replicas":3},"confidence":0.8}`
+	req := httptest.NewRequest(http.MethodPost, "/internal/incidents/incident-1/diagnosis", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+testDiagnosisToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if receiver.calls != 1 {
+		t.Fatalf("expected OnDiagnosis called once, got %d", receiver.calls)
+	}
+	if receiver.diag.RecommendedAction != "scale_deployment" {
+		t.Errorf("expected recommended_action scale_deployment, got %q", receiver.diag.RecommendedAction)
+	}
+	if got := receiver.diag.ActionParams["replicas"]; got != float64(3) {
+		t.Errorf("expected action_params[replicas] == float64(3), got %#v (%T)", got, got)
+	}
+}
+
+func TestNewRouter_DiagnosisCallback_AcceptsPatchResourcesAndRollbackDeployment(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "patch_resources",
+			body: `{"failure_mode":"OOMKilled","recommended_action":"patch_resources","action_params":{"memory_limit":"512Mi"},"confidence":0.75}`,
+		},
+		{
+			name: "rollback_deployment",
+			body: `{"failure_mode":"CrashLoopBackOff","recommended_action":"rollback_deployment","action_params":{},"confidence":0.85}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
+			receiver := &fakeDiagnosisReceiver{}
+			router := newTestRouter(slackClient, store.NewMemoryStore(), receiver)
+
+			req := httptest.NewRequest(http.MethodPost, "/internal/incidents/incident-1/diagnosis", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer "+testDiagnosisToken)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if receiver.calls != 1 {
+				t.Fatalf("expected OnDiagnosis called once, got %d", receiver.calls)
+			}
+		})
+	}
+}
+
+func TestNewRouter_DiagnosisCallback_AcceptsRequestWithNoActionParamsField(t *testing.T) {
+	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
+	receiver := &fakeDiagnosisReceiver{}
+	router := newTestRouter(slackClient, store.NewMemoryStore(), receiver)
+
+	body := `{"failure_mode":"CrashLoopBackOff","recommended_action":"restart_pod","confidence":0.9}`
+	req := httptest.NewRequest(http.MethodPost, "/internal/incidents/incident-1/diagnosis", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+testDiagnosisToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if receiver.calls != 1 {
+		t.Fatalf("expected OnDiagnosis called once, got %d", receiver.calls)
+	}
+	if receiver.diag.ActionParams != nil {
+		t.Errorf("expected ActionParams to be a nil map when action_params is absent from the request body, got %#v", receiver.diag.ActionParams)
+	}
+}
+
 // TestNewRouter_DiagnosisCallback_ReceiverContextSurvivesClientCancellation
 // proves the C2 fix: OnDiagnosis can run for up to VERIFY_TIMEOUT_SECONDS
 // inside executeAndVerify's health-check poll, which must not be aborted

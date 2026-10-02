@@ -14,19 +14,21 @@ import (
 
 // DiagnosisReceiver is satisfied by *reconcile.Reconciler — defined here,
 // at the point of use, rather than importing the concrete type, matching
-// this codebase's existing pattern (see reconcile.PodRestarter).
+// this codebase's existing pattern (see reconcile.Remediator).
 type DiagnosisReceiver interface {
 	OnDiagnosis(ctx context.Context, incidentID string, diag analyze.Diagnosis)
 }
 
 type diagnosisRequest struct {
-	FailureMode       string  `json:"failure_mode"`
-	RecommendedAction string  `json:"recommended_action"`
-	Confidence        float64 `json:"confidence"`
+	FailureMode       string         `json:"failure_mode"`
+	RecommendedAction string         `json:"recommended_action"`
+	Confidence        float64        `json:"confidence"`
+	ActionParams      map[string]any `json:"action_params"`
 }
 
-// diagnosisHandler is deliberately the one place that enforces ai/'s output
-// vocabulary — restart_pod or none, nothing else — rather than trusting
+// diagnosisHandler is deliberately the one place that enforces ai/'s
+// output vocabulary against analyze.ValidActions, the single source of
+// truth reconcile.go's dispatch also reads from — rather than trusting
 // ai/'s prompt/rules alone (see docs/superpowers/specs/2026-08-08-ai-diagnosis-service-design.md §5).
 func diagnosisHandler(receiver DiagnosisReceiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -42,9 +44,9 @@ func diagnosisHandler(receiver DiagnosisReceiver) http.HandlerFunc {
 			http.Error(w, "bad request body", http.StatusBadRequest)
 			return
 		}
-		if req.RecommendedAction != "restart_pod" && req.RecommendedAction != "none" {
+		if !analyze.ValidActions[req.RecommendedAction] {
 			slog.Warn("diagnosis callback: rejected out-of-vocabulary recommended_action", "incident_id", incidentID, "recommended_action", req.RecommendedAction)
-			http.Error(w, `recommended_action must be "restart_pod" or "none"`, http.StatusBadRequest)
+			http.Error(w, "recommended_action not recognized", http.StatusBadRequest)
 			return
 		}
 
@@ -58,6 +60,7 @@ func diagnosisHandler(receiver DiagnosisReceiver) http.HandlerFunc {
 			FailureMode:       req.FailureMode,
 			RecommendedAction: req.RecommendedAction,
 			Confidence:        req.Confidence,
+			ActionParams:      req.ActionParams,
 		})
 		w.WriteHeader(http.StatusOK)
 	}

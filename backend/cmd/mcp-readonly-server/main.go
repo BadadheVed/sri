@@ -41,6 +41,14 @@ type DescribePodOutput struct {
 	Summary introspect.PodSummary `json:"summary"`
 }
 
+type DescribeDeploymentInput struct {
+	Namespace string `json:"namespace" jsonschema:"the pod's namespace"`
+	Name      string `json:"name" jsonschema:"the pod's own name — the owning Deployment is resolved automatically"`
+}
+type DescribeDeploymentOutput struct {
+	Summary introspect.DeploymentSummary `json:"summary"`
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
@@ -81,11 +89,20 @@ func main() {
 		}
 		return nil, DescribePodOutput{Summary: summary}, nil
 	}
+	describeDeployment := func(ctx context.Context, req *mcp.CallToolRequest, input DescribeDeploymentInput) (*mcp.CallToolResult, DescribeDeploymentOutput, error) {
+		summary, err := introspect.DescribeDeployment(ctx, clientset, input.Namespace, input.Name)
+		if err != nil {
+			slog.Error("describe_deployment failed", "namespace", input.Namespace, "name", input.Name, "error", err)
+			return nil, DescribeDeploymentOutput{}, err
+		}
+		return nil, DescribeDeploymentOutput{Summary: summary}, nil
+	}
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "sre-readonly", Version: "v1.0.0"}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_pod_logs", Description: "Returns the tail of a pod's container logs. Read-only."}, getPodLogs)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_pod_events", Description: "Returns Kubernetes Events involving a pod. Read-only."}, getPodEvents)
 	mcp.AddTool(server, &mcp.Tool{Name: "describe_pod", Description: "Returns a compact status summary of a pod: phase, container states, restart counts. Read-only."}, describePod)
+	mcp.AddTool(server, &mcp.Tool{Name: "describe_deployment", Description: "Resolves the pod's owning Deployment and returns its rollout state (current image, replica counts, current revision) plus the previous revision's image if one exists — use this to tell apart 'a recent rollout broke this' from 'this never worked'. Read-only."}, describeDeployment)
 
 	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		return server

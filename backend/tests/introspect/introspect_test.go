@@ -4,8 +4,10 @@ import (
 	"context"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"sre-platform/backend/internal/introspect"
@@ -73,5 +75,93 @@ func TestDescribePod_SummarizesContainerState(t *testing.T) {
 	}
 	if len(summary.Containers) != 1 || summary.Containers[0].RestartCount != 4 || summary.Containers[0].Reason != "CrashLoopBackOff" {
 		t.Fatalf("unexpected container summary: %+v", summary.Containers)
+	}
+}
+
+func TestDescribeDeployment_ReportsCurrentStateAndPreviousRevisionImage(t *testing.T) {
+	depUID := types.UID("dep-uid-1")
+	replicas := int32(1)
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web", Namespace: "default", UID: depUID,
+			Annotations: map[string]string{"deployment.kubernetes.io/revision": "2"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "app:bad-tag"}}},
+			},
+		},
+		Status: appsv1.DeploymentStatus{ReadyReplicas: 0, AvailableReplicas: 0},
+	}
+	rsOld := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-old", Namespace: "default", Labels: map[string]string{"app": "web"},
+			Annotations:     map[string]string{"deployment.kubernetes.io/revision": "1"},
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "web", UID: depUID}},
+		},
+		Spec: appsv1.ReplicaSetSpec{
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "app:v1"}}}},
+		},
+	}
+	rsCurrent := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-new", Namespace: "default", Labels: map[string]string{"app": "web"},
+			Annotations:     map[string]string{"deployment.kubernetes.io/revision": "2"},
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "web", UID: depUID}},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "web-new-xyz", Namespace: "default",
+		OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "web-new"}},
+	}}
+	clientset := fake.NewSimpleClientset(deployment, rsOld, rsCurrent, pod)
+
+	summary, err := introspect.DescribeDeployment(context.Background(), clientset, "default", "web-new-xyz")
+	if err != nil {
+		t.Fatalf("DescribeDeployment: %v", err)
+	}
+	if summary.DeploymentName != "web" || summary.CurrentImage != "app:bad-tag" || summary.CurrentRevision != 2 {
+		t.Fatalf("unexpected current-state summary: %+v", summary)
+	}
+	if summary.PreviousRevision == nil || summary.PreviousRevision.Revision != 1 || summary.PreviousRevision.Image != "app:v1" {
+		t.Fatalf("expected previous revision 1 with image app:v1, got %+v", summary.PreviousRevision)
+	}
+}
+
+func TestDescribeDeployment_PreviousRevisionNilWhenNoneExists(t *testing.T) {
+	depUID := types.UID("dep-uid-1")
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web", Namespace: "default", UID: depUID,
+			Annotations: map[string]string{"deployment.kubernetes.io/revision": "1"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "app:v1"}}},
+			},
+		},
+	}
+	rs := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-abc", Namespace: "default", Labels: map[string]string{"app": "web"},
+			Annotations:     map[string]string{"deployment.kubernetes.io/revision": "1"},
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "web", UID: depUID}},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "web-abc-xyz", Namespace: "default",
+		OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "web-abc"}},
+	}}
+	clientset := fake.NewSimpleClientset(deployment, rs, pod)
+
+	summary, err := introspect.DescribeDeployment(context.Background(), clientset, "default", "web-abc-xyz")
+	if err != nil {
+		t.Fatalf("DescribeDeployment: %v", err)
+	}
+	if summary.PreviousRevision != nil {
+		t.Fatalf("expected no previous revision, got %+v", summary.PreviousRevision)
 	}
 }

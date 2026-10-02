@@ -22,21 +22,57 @@ _FALLBACK_MESSAGES: list[dict[str, str]] = [
             "investigation with exactly one JSON object on its own line, matching this\n"
             "shape:\n"
             "\n"
-            '{"failure_mode": "<short name>", "recommended_action": "restart_pod" | "none", "confidence": <0.0-1.0>}\n'
+            '{"failure_mode": "<short name>", "recommended_action": "restart_pod" | "scale_deployment" | "patch_resources" | "rollback_deployment" | "none", "action_params": {...}, "confidence": <0.0-1.0>}\n'
+            "\n"
+            "action_params depends on recommended_action:\n"
+            '- "restart_pod", "rollback_deployment", "none": {} (omit or leave empty)\n'
+            '- "scale_deployment": {"replicas": <int>} — desired replica count\n'
+            '- "patch_resources": {"memory_limit": "<k8s quantity, e.g. 512Mi>", "cpu_limit": "<k8s quantity, e.g. 500m>"} — at least one of the two is required\n'
             "\n"
             "Rules:\n"
-            "- recommended_action MUST be exactly \"restart_pod\" or \"none\" — no other\n"
-            "  value is ever wired to an executor, so anything else is silently\n"
-            "  equivalent to guessing wrong.\n"
-            "- Use \"none\" whenever restarting the pod would not plausibly fix the\n"
-            "  underlying problem (a bad image reference, a missing secret/config, an\n"
-            "  unschedulable resource request) — do not default to \"restart_pod\" just\n"
-            "  because you're unsure; lower confidence instead.\n"
-            "- Investigate before concluding: call at least one tool unless the incident\n"
-            "  summary alone is unambiguous.\n"
+            '- recommended_action MUST be exactly one of "restart_pod", "scale_deployment",\n'
+            '  "patch_resources", "rollback_deployment", or "none" — no other value is ever\n'
+            "  wired to an executor, so anything else is silently equivalent to guessing\n"
+            "  wrong, and a malformed action_params for the action you chose is treated the\n"
+            '  same as choosing "none".\n'
+            '- Use "restart_pod" for a transient crash where the same container image and\n'
+            "  resource limits should simply run again.\n"
+            '- Use "scale_deployment" when the workload is under-provisioned for current\n'
+            "  load (e.g. repeated resource pressure with otherwise-healthy individual\n"
+            "  replicas, or a capacity signal that more replicas would help).\n"
+            '- Use "patch_resources" when a replica is failing from hitting its own memory\n'
+            "  or CPU limit (e.g. OOMKilled) and a higher limit would plausibly prevent\n"
+            "  recurrence.\n"
+            '- Use "rollback_deployment" whenever describe_deployment reports a\n'
+            "  previous_revision — that field is direct evidence a prior, different\n"
+            "  revision exists for this Deployment, regardless of whether you can\n"
+            "  independently confirm that revision was healthy. This includes an\n"
+            "  image-pull failure: a bad/missing image tag on a Deployment that has a\n"
+            "  previous_revision is almost always a bad rollout, not a permanently\n"
+            "  broken workload, and rollback_deployment is safe to try even when\n"
+            "  you're not fully certain — it fails cleanly with no side effect if there\n"
+            "  truly was nothing usable to roll back to.\n"
+            '- Use "none" only when no action is plausible at all — e.g. a missing\n'
+            "  secret/config, an unschedulable resource request, or describe_deployment\n"
+            "  shows no previous_revision (so there is nothing rollback_deployment could\n"
+            "  do either). Do not default to \"none\" just because you're unsure whether\n"
+            "  an action will help — if a plausible action exists, prefer attempting it\n"
+            "  and lower confidence instead; \"none\" should mean \"no automated action\n"
+            "  applies,\" not \"I'm not fully sure.\"\n"
+            "- Always call at least one tool before concluding — never skip\n"
+            "  investigation just because the incident's signal names look familiar\n"
+            "  or unambiguous. Signal names come from a coarse, mechanical event\n"
+            "  classifier upstream and are hints, not verified facts: for example,\n"
+            "  Kubernetes reuses the same \"BackOff\" event reason both for a\n"
+            "  crash-looping container AND for a stalled image pull, so a signal\n"
+            "  literally named \"CrashLoopBackOff\" can still actually be an image\n"
+            "  pull problem. Use describe_pod and get_pod_events to confirm what is\n"
+            "  really happening, and use describe_deployment whenever the pod belongs\n"
+            "  to a Deployment to check its rollout/revision history before choosing\n"
+            "  between rollback_deployment and none.\n"
             "- If resource exhaustion, latency degradation, or an error-rate spike could\n"
-            "  explain the failure and a resource/traffic tool is available, use it\n"
-            "  before concluding.\n"
+            "  explain the failure and a resource/traffic tool is available, use it before\n"
+            "  concluding.\n"
         ),
     },
     {

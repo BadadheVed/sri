@@ -38,6 +38,7 @@ type Settings struct {
 	BeylaPodSelector       string
 	BeylaNamespace         string
 	BeylaPort              int
+	SelfNamespace          string
 }
 
 // Load reads Settings from the process environment and fails fast — the
@@ -67,6 +68,13 @@ func Load() Settings {
 		BeylaPodSelector:       getenv("BEYLA_POD_SELECTOR", ""),
 		BeylaNamespace:         getenv("BEYLA_NAMESPACE", ""),
 		BeylaPort:              atoi(getenv("BEYLA_PORT", "0")),
+		// Populated via the Downward API (fieldRef: metadata.namespace) in
+		// deployment-backend.yaml, not read from the release's own config —
+		// this must reflect wherever this pod actually landed, not a value
+		// that could drift from it. Empty (e.g. running outside the chart)
+		// means "no self-namespace to exclude," which is a safe default:
+		// the watcher simply doesn't filter anything.
+		SelfNamespace: getenv("POD_NAMESPACE", ""),
 	}
 	if err := s.Validate(); err != nil {
 		slog.Error("invalid settings", "error", err)

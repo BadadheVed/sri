@@ -45,6 +45,15 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.backend.port }}
+          env:
+            # Read back via Downward API, not templated from .Release.Namespace,
+            # so it's always exactly where this pod actually landed. Lets the
+            # watcher (internal/k8swatch) exclude SAGE's own namespace from
+            # signal detection — see settings.SelfNamespace.
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: {{ include "sage.fullname" . }}-config

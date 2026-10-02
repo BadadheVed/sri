@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -56,4 +57,47 @@ func isReady(p corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// CheckDeploymentRolledOut polls the named Deployment until its rollout has
+// finished (UpdatedReplicas and ReadyReplicas both equal the desired
+// replica count, and the controller has observed the latest spec
+// generation) or timeout elapses. Used by the three Deployment-targeting
+// actions; CheckPodHealthy remains restart_pod's own check since it
+// verifies a specific replacement pod by label, not a whole rollout.
+//
+// An empty deploymentName is treated as unverifiable and returns (false,
+// nil) immediately, mirroring CheckPodHealthy's empty-labels guard.
+func CheckDeploymentRolledOut(ctx context.Context, clientset kubernetes.Interface, namespace, deploymentName string, timeout, pollInterval time.Duration) (bool, error) {
+	if deploymentName == "" {
+		return false, nil
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		d, err := clientset.AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		if rolledOut(d) {
+			return true, nil
+		}
+		if time.Now().After(deadline) {
+			return false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+func rolledOut(d *appsv1.Deployment) bool {
+	desired := int32(1)
+	if d.Spec.Replicas != nil {
+		desired = *d.Spec.Replicas
+	}
+	return d.Status.ObservedGeneration >= d.Generation &&
+		d.Status.UpdatedReplicas == desired &&
+		d.Status.ReadyReplicas == desired
 }

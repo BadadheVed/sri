@@ -29,7 +29,13 @@ def test_diagnosis_serializes_to_expected_json_keys():
         "failure_mode": "CrashLoopBackOff",
         "recommended_action": "restart_pod",
         "confidence": 0.9,
+        "action_params": {},
     }
+
+
+def test_diagnosis_serializes_action_params_when_set():
+    diag = Diagnosis(failure_mode="CrashLoopBackOff", recommended_action="restart_pod", confidence=0.9, action_params={"replicas": 3})
+    assert diag.model_dump()["action_params"] == {"replicas": 3}
 
 
 def test_pending_incident_handles_null_signals():

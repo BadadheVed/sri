@@ -7,7 +7,11 @@ from ai.settings import Settings
 
 
 async def post_diagnosis(
-    settings: Settings, incident_id: str, diagnosis: Diagnosis, *, client: httpx.AsyncClient | None = None
+    settings: Settings,
+    incident_id: str,
+    diagnosis: Diagnosis,
+    *,
+    client: httpx.AsyncClient | None = None,
 ) -> None:
     """POSTs the diagnosis to backend's callback route
     (backend/internal/httpserver/diagnosis.go). Raises on a non-2xx

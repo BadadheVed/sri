@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
-from ai.consumer import handle_message
+import pytest
+from langchain_core.exceptions import ModelAPIError, ModelAuthenticationError
+
+from ai.consumer import _process_message, handle_message
 from ai.models import PendingIncident, SignalPayload
 from ai.settings import Settings
 
@@ -34,3 +37,42 @@ async def test_handle_message_diagnoses_and_posts_back():
     call_args = mock_post.call_args.args
     assert call_args[1] == "incident-1"
     assert call_args[2].failure_mode == "CrashLoopBackOff"
+
+
+async def test_process_message_acks_on_success():
+    msg = AsyncMock()
+    msg.data = b"irrelevant"
+
+    with patch("ai.consumer.handle_message", new=AsyncMock()) as mock_handle:
+        await _process_message(msg, _settings(), model=None, tools=[], prompt_client=None)
+
+    mock_handle.assert_awaited_once()
+    msg.ack.assert_awaited_once()
+
+
+async def test_process_message_swallows_retryable_model_error_without_acking():
+    msg = AsyncMock()
+    msg.data = b"irrelevant"
+    error = ModelAPIError("upstream overloaded")
+    assert error.is_retryable  # sanity: this is the class this test exists to cover
+
+    with patch("ai.consumer.handle_message", new=AsyncMock(side_effect=error)):
+        # Must not raise — a retryable provider hiccup is swallowed (logged
+        # concisely, not as a full traceback) so the consumer loop keeps
+        # running instead of crashing the whole process.
+        await _process_message(msg, _settings(), model=None, tools=[], prompt_client=None)
+
+    msg.ack.assert_not_awaited()
+
+
+async def test_process_message_reraises_non_retryable_model_error_without_acking():
+    msg = AsyncMock()
+    msg.data = b"irrelevant"
+    error = ModelAuthenticationError("bad credentials")
+    assert not error.is_retryable  # sanity: this is the class this test exists to cover
+
+    with patch("ai.consumer.handle_message", new=AsyncMock(side_effect=error)):
+        with pytest.raises(ModelAuthenticationError):
+            await _process_message(msg, _settings(), model=None, tools=[], prompt_client=None)
+
+    msg.ack.assert_not_awaited()

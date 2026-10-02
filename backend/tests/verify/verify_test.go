@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -74,4 +75,90 @@ func TestCheckPodHealthy_ReturnsFalseImmediatelyWhenLabelsEmpty(t *testing.T) {
 	if elapsed > 200*time.Millisecond {
 		t.Errorf("expected CheckPodHealthy to return immediately (no polling) for empty labels, took %v", elapsed)
 	}
+}
+
+func rolledOutDeployment(name string, replicas int32) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 1, UpdatedReplicas: replicas, ReadyReplicas: replicas,
+		},
+	}
+}
+
+func TestCheckDeploymentRolledOut_ReturnsTrueWhenFullyRolledOut(t *testing.T) {
+	ctx := context.Background()
+	clientset := fake.NewSimpleClientset(rolledOutDeployment("web", 3))
+
+	rolledOut, err := verify.CheckDeploymentRolledOut(ctx, clientset, "default", "web", 2*time.Second, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("CheckDeploymentRolledOut: %v", err)
+	}
+	if !rolledOut {
+		t.Error("expected rolledOut=true when deployment is fully rolled out")
+	}
+}
+
+func TestCheckDeploymentRolledOut_ReturnsFalseWhenReadyReplicasBehind(t *testing.T) {
+	ctx := context.Background()
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default", Generation: 1},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptrInt32(3)},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 1, UpdatedReplicas: 3, ReadyReplicas: 1,
+		},
+	}
+	clientset := fake.NewSimpleClientset(deployment)
+
+	rolledOut, err := verify.CheckDeploymentRolledOut(ctx, clientset, "default", "web", 200*time.Millisecond, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("CheckDeploymentRolledOut: %v", err)
+	}
+	if rolledOut {
+		t.Error("expected rolledOut=false when ReadyReplicas < desired")
+	}
+}
+
+func TestCheckDeploymentRolledOut_ReturnsFalseWhenObservedGenerationStale(t *testing.T) {
+	ctx := context.Background()
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default", Generation: 1},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptrInt32(3)},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 0, UpdatedReplicas: 3, ReadyReplicas: 3,
+		},
+	}
+	clientset := fake.NewSimpleClientset(deployment)
+
+	rolledOut, err := verify.CheckDeploymentRolledOut(ctx, clientset, "default", "web", 200*time.Millisecond, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("CheckDeploymentRolledOut: %v", err)
+	}
+	if rolledOut {
+		t.Error("expected rolledOut=false when ObservedGeneration is stale")
+	}
+}
+
+func TestCheckDeploymentRolledOut_ReturnsFalseImmediatelyWhenNameEmpty(t *testing.T) {
+	ctx := context.Background()
+	clientset := fake.NewSimpleClientset()
+
+	start := time.Now()
+	rolledOut, err := verify.CheckDeploymentRolledOut(ctx, clientset, "default", "", 2*time.Second, 50*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("CheckDeploymentRolledOut: %v", err)
+	}
+	if rolledOut {
+		t.Error("expected rolledOut=false when deploymentName is empty")
+	}
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("expected CheckDeploymentRolledOut to return immediately (no polling) for empty name, took %v", elapsed)
+	}
+}
+
+func ptrInt32(v int32) *int32 {
+	return &v
 }

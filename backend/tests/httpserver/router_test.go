@@ -41,7 +41,7 @@ const testDiagnosisToken = "diagnosis-test-token"
 const testMCPReadonlyToken = "mcp-readonly-test-token"
 
 func newTestRouter(slackClient *slackapproval.Client, s store.Store, receiver httpserver.DiagnosisReceiver) http.Handler {
-	return httpserver.NewRouter(slackClient, s, receiver, testDiagnosisToken, httpserver.NewMetricsHub(), testMCPReadonlyToken)
+	return httpserver.NewRouter(slackClient, s, receiver, testDiagnosisToken, httpserver.NewMetricsHub(), testMCPReadonlyToken, nil, "")
 }
 
 func TestNewRouter_HealthzReturnsOK(t *testing.T) {
@@ -249,7 +249,7 @@ func TestNewRouter_DiagnosisCallback_ReceiverContextSurvivesClientCancellation(t
 func TestNewRouter_MetricsWS_MissingTokenRejected(t *testing.T) {
 	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
 	hub := httpserver.NewMetricsHub()
-	router := httpserver.NewRouter(slackClient, store.NewMemoryStore(), &fakeDiagnosisReceiver{}, testDiagnosisToken, hub, testMCPReadonlyToken)
+	router := httpserver.NewRouter(slackClient, store.NewMemoryStore(), &fakeDiagnosisReceiver{}, testDiagnosisToken, hub, testMCPReadonlyToken, nil, "")
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -265,7 +265,7 @@ func TestNewRouter_MetricsWS_MissingTokenRejected(t *testing.T) {
 func TestNewRouter_MetricsWS_ValidTokenUpgradesAndReceivesPublishedResults(t *testing.T) {
 	slackClient := slackapproval.NewClient("xoxb-test", "#sre-approvals", "signing-secret", http.DefaultClient)
 	hub := httpserver.NewMetricsHub()
-	router := httpserver.NewRouter(slackClient, store.NewMemoryStore(), &fakeDiagnosisReceiver{}, testDiagnosisToken, hub, testMCPReadonlyToken)
+	router := httpserver.NewRouter(slackClient, store.NewMemoryStore(), &fakeDiagnosisReceiver{}, testDiagnosisToken, hub, testMCPReadonlyToken, nil, "")
 	server := httptest.NewServer(router)
 	defer server.Close()
 

@@ -25,6 +25,14 @@ data:
   LANGFUSE_PUBLIC_KEY: {{ required "langfusePublicKey is required when langfuse.enabled is true" .Values.langfusePublicKey | quote }}
   LANGFUSE_PROMPT_CACHE_TTL_SECONDS: {{ .Values.langfuse.promptCacheTtlSeconds | quote }}
   {{- end }}
+  {{- if .Values.beyla.enabled }}
+  BEYLA_ENABLED: "true"
+  # Must match the DaemonSet pod label in beyla-daemonset.yaml.
+  BEYLA_POD_SELECTOR: "app.kubernetes.io/name=beyla"
+  BEYLA_PORT: {{ .Values.beyla.port | quote }}
+  BEYLA_NAMESPACE: {{ .Release.Namespace | quote }}
+  METRICS_POLL_INTERVAL_SECONDS: {{ .Values.beyla.pollIntervalSeconds | quote }}
+  {{- end }}
   # KUBECONFIG is deliberately never set here. Leaving it unset is what makes
   # client-go fall back to in-cluster config automatically (it reads the
   # ServiceAccount token/CA cert Kubernetes already mounts into the pod) —

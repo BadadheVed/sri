@@ -17,20 +17,24 @@ import (
 // cmd/mcp-execute-server both load one of these) — no other package calls
 // os.Getenv directly.
 type Settings struct {
-	DatabaseURL            string
-	Kubeconfig             string
-	Mode                   gate.Mode
-	VerifyTimeout          time.Duration
-	CorrelationWindow      time.Duration
-	SlackBotToken          string
-	SlackSigningSecret     string
-	SlackApprovalChannel   string
-	HTTPAddr               string
-	MCPExecuteAddr         string
-	MCPExecuteToken        string
-	MCPExecuteURL          string
-	MCPReadonlyAddr        string
-	MCPReadonlyToken       string
+	DatabaseURL          string
+	Kubeconfig           string
+	Mode                 gate.Mode
+	VerifyTimeout        time.Duration
+	CorrelationWindow    time.Duration
+	SlackBotToken        string
+	SlackSigningSecret   string
+	SlackApprovalChannel string
+	HTTPAddr             string
+	MCPExecuteAddr       string
+	MCPExecuteToken      string
+	MCPExecuteURL        string
+	MCPReadonlyAddr      string
+	MCPReadonlyToken     string
+	// TopologyWSToken authenticates the browser-facing /ws/topology stream
+	// (?token=). Optional: empty disables the endpoint (404). Kept separate
+	// from MCPReadonlyToken because it is handed to browsers.
+	TopologyWSToken        string
 	NATSURL                string
 	DiagnosisCallbackToken string
 	MetricsPollInterval    time.Duration
@@ -61,6 +65,7 @@ func Load() Settings {
 		MCPExecuteURL:          getenv("MCP_EXECUTE_URL", "http://localhost:8090"),
 		MCPReadonlyAddr:        getenv("MCP_READONLY_ADDR", ":8091"),
 		MCPReadonlyToken:       getenv("MCP_READONLY_TOKEN", ""),
+		TopologyWSToken:        getenv("TOPOLOGY_WS_TOKEN", ""),
 		NATSURL:                getenv("NATS_URL", ""),
 		DiagnosisCallbackToken: getenv("DIAGNOSIS_CALLBACK_TOKEN", ""),
 		MetricsPollInterval:    seconds(getenv("METRICS_POLL_INTERVAL_SECONDS", "15")),

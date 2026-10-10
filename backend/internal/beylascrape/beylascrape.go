@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -27,6 +28,12 @@ type Config struct {
 	Port int
 	// Timeout bounds each pod's individual scrape HTTP GET.
 	Timeout time.Duration
+	// CacheTTL, when > 0, lets Poll (metricsagg) and ScrapeEdgeCounters
+	// (topology) share one HTTP fetch per pod: a pod's /metrics text is
+	// reused for CacheTTL, and concurrent callers share an in-flight fetch.
+	// Set it below the poll interval (e.g. half of it) so each tick still
+	// sees fresh data. Zero disables caching.
+	CacheTTL time.Duration
 }
 
 // Source implements metricsagg.Source by discovering Beyla pods via the
@@ -35,6 +42,9 @@ type Source struct {
 	clientset  kubernetes.Interface
 	httpClient *http.Client
 	cfg        Config
+
+	cacheMu sync.Mutex
+	cache   map[string]*cacheEntry
 }
 
 // NewSource builds a Source. httpClient may be nil, in which case
@@ -43,7 +53,7 @@ func NewSource(clientset kubernetes.Interface, httpClient *http.Client, cfg Conf
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Source{clientset: clientset, httpClient: httpClient, cfg: cfg}
+	return &Source{clientset: clientset, httpClient: httpClient, cfg: cfg, cache: map[string]*cacheEntry{}}
 }
 
 // Poll implements metricsagg.Source: discover the current Beyla pods,
@@ -58,15 +68,16 @@ func NewSource(clientset kubernetes.Interface, httpClient *http.Client, cfg Conf
 // unreachable or misbehaving Beyla pod shouldn't blank out every other
 // series in this tick.
 func (s *Source) Poll(ctx context.Context) (map[metricsagg.SeriesKey]histogramquantile.Sample, error) {
-	pods, err := s.DiscoverPods(ctx)
+	pods, err := s.discoverTargets(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	now := time.Now()
 	combined := make(map[metricsagg.SeriesKey][]histogramquantile.Bucket)
-	for _, podIP := range pods {
-		text, err := s.scrapeOne(ctx, podIP)
+	for _, pod := range pods {
+		podIP := pod.ip
+		text, _, err := s.fetch(ctx, pod)
 		if err != nil {
 			slog.Warn("beylascrape: scraping pod failed, skipping", "pod_ip", podIP, "error", err)
 			continue

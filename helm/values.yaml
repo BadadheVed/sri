@@ -20,6 +20,11 @@ backend:
     host: ""
     path: /slack
     pathType: Prefix
+    # Optional extra Exact path for the live topology WebSocket, e.g.
+    # "/ws/topology". Empty (default) = not exposed through the Ingress.
+    # Auth is a ?token= query parameter (dev-only; see router.go), so only
+    # expose it over TLS and on a trusted network.
+    wsPath: ""
     annotations: {}
     tls: []
   resources: {}
@@ -90,6 +95,11 @@ ai:
 
 mcpReadonlyToken: ""
 diagnosisCallbackToken: ""
+# Token for the browser-facing /ws/topology stream (passed as ?token=, so it
+# is visible to browsers: use a dedicated value, never mcpReadonlyToken).
+# Optional, no default: empty disables /ws/topology (404) and the backend
+# logs that at startup.
+topologyWsToken: ""
 
 llm:
   provider: ""   # "anthropic" | "openai" | "openrouter" | "google"
@@ -128,7 +138,8 @@ mcpExecuteToken: ""
 secrets:
   # Name of a pre-existing Secret with keys DATABASE_URL, SLACK_BOT_TOKEN,
   # SLACK_SIGNING_SECRET, MCP_EXECUTE_TOKEN, MCP_READONLY_TOKEN,
-  # DIAGNOSIS_CALLBACK_TOKEN, and LLM_API_KEY. When set, the chart's own
+  # DIAGNOSIS_CALLBACK_TOKEN, and LLM_API_KEY (plus optional
+  # TOPOLOGY_WS_TOKEN to enable /ws/topology). When set, the chart's own
   # secret.yaml is skipped entirely and slack.*/mcpExecuteToken/database
   # values above are ignored — you own the Secret's lifecycle.
   existingSecret: ""
@@ -153,3 +164,25 @@ migration:
     repository: postgres
     tag: 16-alpine
   backoffLimit: 2
+
+beyla:
+  # Off by default. When true, deploys a privileged eBPF DaemonSet (Grafana
+  # Beyla) and tells the backend to scrape its HTTP metrics (client-side
+  # request counts become the live cluster topology view's edges). See helm/README.md before enabling.
+  enabled: false
+  image:
+    repository: grafana/beyla
+    tag: "3.37.0"
+    pullPolicy: IfNotPresent
+  # Port Beyla serves Prometheus metrics on (also BEYLA_PORT for the backend).
+  port: 9400
+  # Namespaces to instrument. Empty list = all namespaces ("*"). Each entry
+  # is a Beyla 2.x GLOB pattern (e.g. "shop", "team-*"), rendered as its own
+  # discovery.instrument entry — not a regex.
+  namespaces: []
+  # How often the backend polls Beyla's metrics endpoints.
+  pollIntervalSeconds: 15
+  resources: {}
+  nodeSelector: {}
+  tolerations:
+    - operator: Exists

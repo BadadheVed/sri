@@ -32,3 +32,34 @@ cluster-scoped prerequisite):
      --set langfusePublicKey=<your-public-key> \
      --set langfuseSecretKey=<your-secret-key>
    ```
+
+## Beyla (live cluster topology)
+
+Optional, off by default (`beyla.enabled=false`). When enabled the chart
+deploys Grafana Beyla as a DaemonSet (label `app.kubernetes.io/name=beyla`)
+and sets `BEYLA_ENABLED`, `BEYLA_POD_SELECTOR`, `BEYLA_PORT`,
+`BEYLA_NAMESPACE` and `METRICS_POLL_INTERVAL_SECONDS` on the backend.
+
+- Beyla is eBPF-based: the DaemonSet runs `privileged` with `hostPID: true`
+  and a read-only ClusterRole (pods, services, nodes, namespaces,
+  replicasets). Only enable it on clusters where you accept that.
+- `beyla.namespaces` limits instrumentation (empty = all namespaces). Entries
+  are Beyla 2.x glob patterns (e.g. `shop`, `team-*`), each rendered as its own
+  `discovery.instrument` entry; empty renders `k8s_namespace: "*"`.
+- Only the `application` Prometheus feature is exported (what the backend
+  reads): HTTP server histograms for `/ws/metrics`, and
+  `http_client_request_duration_seconds` counts, from which the topology
+  edges are derived (Beyla 3.x does not emit `traces_service_graph_*` here).
+- The live topology stream `/ws/topology` needs its own token: set
+  `topologyWsToken` (or `TOPOLOGY_WS_TOKEN` in `secrets.existingSecret`).
+  It has no default; when empty the endpoint is disabled (404) and the backend
+  logs that at startup. It is sent by browsers as `?token=`, so never reuse
+  `mcpReadonlyToken`.
+- EKS Auto Mode caveat: nodes are AWS-managed with a locked-down OS, and
+  privileged/hostPID workloads may be rejected or unable to load eBPF
+  programs. Verify on a test cluster first; managed-node-group EKS works.
+
+```bash
+helm upgrade sage ./helm -n sage -f helm/values.secret.yaml --set beyla.enabled=true \
+  --set topologyWsToken=<random-token>
+```

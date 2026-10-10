@@ -1,0 +1,151 @@
+{{- if .Values.beyla.enabled }}
+{{- $beylaName := printf "%s-beyla" (include "sage.fullname" .) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $beylaName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beyla
+---
+# Beyla's Kubernetes metadata decorator watches these resources to label
+# traces/metrics with pod, service, namespace and owning workload names.
+# Read-only (get/list/watch).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $beylaName }}
+  labels:
+    {{- include "sage.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beyla
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "nodes", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $beylaName }}
+  labels:
+    {{- include "sage.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beyla
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $beylaName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $beylaName }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $beylaName }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beyla
+data:
+  # Beyla 2.x discovery.instrument selectors are GLOB patterns (not
+  # regexes): "*" matches every namespace, and a namespace list becomes one
+  # instrument entry per namespace (entries are OR-ed).
+  beyla-config.yml: |
+    discovery:
+      instrument:
+      {{- if .Values.beyla.namespaces }}
+      {{- range .Values.beyla.namespaces }}
+        - k8s_namespace: {{ . | quote }}
+      {{- end }}
+      {{- else }}
+        - k8s_namespace: "*"
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $beylaName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beyla
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: beyla
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        # The backend finds Beyla pods via BEYLA_POD_SELECTOR, which must
+        # match this label (see configmap.yaml).
+        app.kubernetes.io/name: beyla
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ $beylaName }}
+      # Required so Beyla can see processes of all pods on the node and
+      # attach eBPF probes to them.
+      hostPID: true
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: beyla
+          image: "{{ .Values.beyla.image.repository }}:{{ .Values.beyla.image.tag }}"
+          imagePullPolicy: {{ .Values.beyla.image.pullPolicy }}
+          securityContext:
+            # Privileged is the simplest way to grant the eBPF capabilities
+            # Beyla needs. Minimal alternative per Beyla docs (replace
+            # `privileged: true` with): runAsUser 0 and capabilities add
+            # BPF (load eBPF programs), PERFMON (attach probes/perf events),
+            # NET_RAW (socket filters), SYS_PTRACE (inspect other processes),
+            # DAC_READ_SEARCH (read executables for uprobes),
+            # CHECKPOINT_RESTORE (read /proc/<pid>/ns links).
+            privileged: true
+            runAsUser: 0
+          env:
+            - name: BEYLA_CONFIG_PATH
+              value: /config/beyla-config.yml
+            # Autodetect in-cluster Kubernetes metadata (uses the RBAC above).
+            - name: BEYLA_KUBE_METADATA_ENABLE
+              value: "autodetect"
+            - name: BEYLA_PROMETHEUS_PORT
+              value: {{ .Values.beyla.port | quote }}
+            # Only what the backend consumes: "application" (HTTP server
+            # latency histograms for /ws/metrics; HTTP client request counts
+            # for topology edges). Service-graph/span/network metrics are not
+            # exported — the backend does not read them and they add scrape
+            # volume and Beyla overhead.
+            - name: BEYLA_PROMETHEUS_FEATURES
+              value: "application"
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.beyla.port }}
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          {{- with .Values.beyla.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $beylaName }}-config
+      {{- with .Values.beyla.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.beyla.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

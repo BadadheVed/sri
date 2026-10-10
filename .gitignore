@@ -44,3 +44,8 @@ helm/**/values.prod.yaml
 # Helm dependency chart archives — build artifacts, not source. Chart.lock
 # pins the exact version; `helm dependency build` refetches them from that.
 helm/charts/*.tgz
+# Local scratch traffic generator
+dummy_app/
+
+# Local demo scripts
+demo/

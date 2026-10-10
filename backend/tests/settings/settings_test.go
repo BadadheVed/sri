@@ -104,3 +104,25 @@ func contains(s, substr string) bool {
 			return false
 		}())
 }
+
+// TOPOLOGY_WS_TOKEN is optional: empty disables /ws/topology rather than
+// failing startup, and it is NOT the MCP read-only token.
+func TestSettings_TopologyWSTokenOptionalAndSeparate(t *testing.T) {
+	s := validSettings()
+	s.TopologyWSToken = ""
+	if err := s.Validate(); err != nil {
+		t.Fatalf("empty TOPOLOGY_WS_TOKEN must be valid (endpoint disabled), got %v", err)
+	}
+	for k, v := range map[string]string{
+		"DATABASE_URL": "postgres://x", "SLACK_BOT_TOKEN": "b", "SLACK_SIGNING_SECRET": "s",
+		"MCP_EXECUTE_TOKEN": "e", "MCP_READONLY_TOKEN": "ro", "NATS_URL": "nats://x",
+		"DIAGNOSIS_CALLBACK_TOKEN": "d", "REMEDIATION_MODE": "manual", "BEYLA_ENABLED": "false",
+		"TOPOLOGY_WS_TOKEN": "topo",
+	} {
+		t.Setenv(k, v)
+	}
+	loaded := settings.Load()
+	if loaded.TopologyWSToken != "topo" || loaded.MCPReadonlyToken != "ro" {
+		t.Fatalf("TopologyWSToken=%q MCPReadonlyToken=%q", loaded.TopologyWSToken, loaded.MCPReadonlyToken)
+	}
+}

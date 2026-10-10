@@ -9,11 +9,12 @@ import (
 	"sre-platform/backend/internal/mcpauth"
 	"sre-platform/backend/internal/slackapproval"
 	"sre-platform/backend/internal/store"
+	"sre-platform/backend/internal/topology"
 )
 
 // NewRouter builds backend/'s entire HTTP surface, grouped by prefix, so
 // main.go never defines a route directly. New route groups attach here.
-func NewRouter(slackClient *slackapproval.Client, s store.Store, diagnosisReceiver DiagnosisReceiver, diagnosisCallbackToken string, metricsHub *MetricsHub, mcpReadonlyToken string) http.Handler {
+func NewRouter(slackClient *slackapproval.Client, s store.Store, diagnosisReceiver DiagnosisReceiver, diagnosisCallbackToken string, metricsHub *MetricsHub, mcpReadonlyToken string, topologyHub *topology.Hub, topologyWSToken string) http.Handler {
 	r := chi.NewRouter()
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -46,10 +47,27 @@ func NewRouter(slackClient *slackapproval.Client, s store.Store, diagnosisReceiv
 	// proxy that holds the token server-side). Solving browser-side token
 	// delivery is frontend-consumption work, out of scope here.
 	r.Route("/ws", func(r chi.Router) {
-		r.Use(func(next http.Handler) http.Handler {
+		r.With(func(next http.Handler) http.Handler {
 			return mcpauth.RequireBearerToken(mcpReadonlyToken, next)
-		})
-		r.Get("/metrics", metricsHub.ServeWS)
+		}).Get("/metrics", metricsHub.ServeWS)
+
+		// /ws/topology streams the live service graph for the namespaces a
+		// client subscribes to. It sits OUTSIDE the bearer middleware and
+		// instead authenticates ?token= against its own TOPOLOGY_WS_TOKEN
+		// (constant-time compare, 401 before any upgrade) — deliberately
+		// not MCPReadonlyToken, because this token is handed to a browser
+		// and must be rotatable/revocable without touching MCP access.
+		// With no token configured the route is not registered at all (404);
+		// main logs that at startup.
+		//
+		// DEV-ONLY AUTH: browsers cannot set an Authorization header on a
+		// WebSocket handshake, so the token travels in the query string,
+		// where it can leak into access logs, proxies and browser history.
+		// Production should replace this with a short-lived, single-use
+		// ticket minted by an authenticated HTTP endpoint.
+		if topologyHub != nil && topologyWSToken != "" {
+			r.Method(http.MethodGet, "/topology", NewTopologyWSHandler(topologyHub, topologyWSToken))
+		}
 	})
 
 	return r

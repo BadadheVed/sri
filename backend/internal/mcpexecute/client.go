@@ -65,14 +65,11 @@ func (c *Client) connect(ctx context.Context) (*mcp.ClientSession, error) {
 	return c.mcpClient.Connect(ctx, transport, nil)
 }
 
-func (c *Client) RestartPod(ctx context.Context, namespace, name string) error {
-	params := &mcp.CallToolParams{
-		Name: "restart_pod",
-		Arguments: map[string]any{
-			"namespace": namespace,
-			"name":      name,
-		},
-	}
+// callTool executes a tool call, transparently reconnecting once and
+// retrying if the session was lost (see connect's comment on
+// DisableStandaloneSSE) — shared by all four remediation methods.
+func (c *Client) callTool(ctx context.Context, name string, args map[string]any) (*mcp.CallToolResult, error) {
+	params := &mcp.CallToolParams{Name: name, Arguments: args}
 
 	c.mu.Lock()
 	session := c.session
@@ -80,31 +77,77 @@ func (c *Client) RestartPod(ctx context.Context, namespace, name string) error {
 
 	result, err := session.CallTool(ctx, params)
 	if err != nil {
-		// Observed in production: with DisableStandaloneSSE set, the server
-		// can tear down an idle MCP session between sporadic calls (minutes
-		// apart) even though SessionTimeout is unset — the client then has no
-		// way to know until the next call fails with "session not found".
-		// Reconnect once and retry rather than leaving every subsequent
-		// RestartPod permanently broken for the rest of the process's life.
-		slog.Warn("mcp session call failed, reconnecting and retrying once", "namespace", namespace, "name", name, "error", err)
+		slog.Warn("mcp session call failed, reconnecting and retrying once", "tool", name, "error", err)
 		session, err = c.reconnect(ctx)
 		if err != nil {
-			return fmt.Errorf("restart_pod: session lost and reconnect failed: %w", err)
+			return nil, fmt.Errorf("%s: session lost and reconnect failed: %w", name, err)
 		}
 		result, err = session.CallTool(ctx, params)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	// A tool-level failure (e.g. the executor's Kubernetes call failing) is
-	// reported by the SDK via CallToolResult.IsError, not as a Go error from
-	// CallTool — per the SDK's ToolHandlerFor contract, only transport/protocol
-	// failures (auth, routing, etc.) come back as err above. Without this
-	// check, a failed restart_pod call would be silently treated as success.
 	if result.IsError {
-		return fmt.Errorf("restart_pod: %s", toolErrorText(result))
+		return nil, fmt.Errorf("%s: %s", name, toolErrorText(result))
 	}
-	return nil
+	return result, nil
+}
+
+func (c *Client) RestartPod(ctx context.Context, namespace, name string) error {
+	_, err := c.callTool(ctx, "restart_pod", map[string]any{"namespace": namespace, "name": name})
+	return err
+}
+
+func (c *Client) ScaleDeployment(ctx context.Context, namespace, podName string, replicas int32) (string, error) {
+	result, err := c.callTool(ctx, "scale_deployment", map[string]any{"namespace": namespace, "name": podName, "replicas": replicas})
+	if err != nil {
+		return "", err
+	}
+	return deploymentNameFromResult(result)
+}
+
+func (c *Client) PatchResources(ctx context.Context, namespace, podName, memoryLimit, cpuLimit string) (string, error) {
+	args := map[string]any{"namespace": namespace, "name": podName}
+	if memoryLimit != "" {
+		args["memory_limit"] = memoryLimit
+	}
+	if cpuLimit != "" {
+		args["cpu_limit"] = cpuLimit
+	}
+	result, err := c.callTool(ctx, "patch_resources", args)
+	if err != nil {
+		return "", err
+	}
+	return deploymentNameFromResult(result)
+}
+
+func (c *Client) RollbackDeployment(ctx context.Context, namespace, podName string) (string, error) {
+	result, err := c.callTool(ctx, "rollback_deployment", map[string]any{"namespace": namespace, "name": podName})
+	if err != nil {
+		return "", err
+	}
+	return deploymentNameFromResult(result)
+}
+
+// deploymentNameFromResult extracts "deployment_name" out of a successful
+// CallToolResult's StructuredContent. Verified against the pinned SDK
+// (github.com/modelcontextprotocol/go-sdk v1.6.1, mcp/server.go +
+// mcp/protocol.go): a ToolHandlerFor's typed Out value is marshaled
+// server-side into StructuredContent as a json.RawMessage, and
+// CallToolResult has no custom UnmarshalJSON for that field (only for the
+// Content interface slice) — so on the client it decodes via plain
+// encoding/json into an `any`, which for a JSON object is always
+// map[string]any.
+func deploymentNameFromResult(result *mcp.CallToolResult) (string, error) {
+	sc, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("tool result missing structured content")
+	}
+	name, ok := sc["deployment_name"].(string)
+	if !ok || name == "" {
+		return "", fmt.Errorf("tool result missing deployment_name")
+	}
+	return name, nil
 }
 
 func (c *Client) reconnect(ctx context.Context) (*mcp.ClientSession, error) {

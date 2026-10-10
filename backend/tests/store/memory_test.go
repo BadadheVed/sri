@@ -16,9 +16,19 @@ func TestMemoryStore_SatisfiesStoreInterface(t *testing.T) {
 	s := store.NewMemoryStore()
 	now := time.Now().UTC()
 
-	incidentID, err := s.CreateIncident(ctx, "default", "Pod", "web-1", "CrashLoopBackOff", now, now)
+	incidentID, err := s.CreatePendingIncident(ctx, "default", "Pod", "web-1", now, now)
 	if err != nil || incidentID == "" {
-		t.Fatalf("CreateIncident: id=%q err=%v", incidentID, err)
+		t.Fatalf("CreatePendingIncident: id=%q err=%v", incidentID, err)
+	}
+	if got := s.Incidents[incidentID].Status; got != "pending_diagnosis" {
+		t.Fatalf("expected status 'pending_diagnosis' right after creation, got %q", got)
+	}
+
+	if err := s.RecordDiagnosis(ctx, incidentID, "CrashLoopBackOff"); err != nil {
+		t.Fatalf("RecordDiagnosis: %v", err)
+	}
+	if got := s.Incidents[incidentID]; got.Status != "diagnosed" || got.FailureMode != "CrashLoopBackOff" {
+		t.Fatalf("expected status 'diagnosed' and failure_mode 'CrashLoopBackOff' after RecordDiagnosis, got status=%q failure_mode=%q", got.Status, got.FailureMode)
 	}
 
 	actionID, err := s.CreateRemediationAction(ctx, incidentID, "restart_pod", false, "auto_approved")
@@ -36,14 +46,17 @@ func TestMemoryStore_SatisfiesStoreInterface(t *testing.T) {
 		t.Fatalf("WriteAudit: %v", err)
 	}
 
-	got := s.Incidents[incidentID]
-	if got.Status != "detected" {
-		t.Errorf("expected incident status 'detected', got %q", got.Status)
-	}
 	if s.Actions[actionID].Status != "verified" {
 		t.Errorf("expected action status 'verified', got %q", s.Actions[actionID].Status)
 	}
 	if len(s.AuditEntries) != 1 {
 		t.Errorf("expected 1 audit entry, got %d", len(s.AuditEntries))
+	}
+}
+
+func TestMemoryStore_RecordDiagnosis_UnknownIncidentErrors(t *testing.T) {
+	s := store.NewMemoryStore()
+	if err := s.RecordDiagnosis(context.Background(), "does-not-exist", "CrashLoopBackOff"); err == nil {
+		t.Fatal("expected an error recording a diagnosis for an unknown incident id")
 	}
 }

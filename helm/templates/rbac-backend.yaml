@@ -7,9 +7,14 @@ metadata:
     {{- include "sage.backend.selectorLabels" . | nindent 4 }}
 ---
 # Read-only, cluster-wide: backend/ watches Events and reads Pods across the
-# whole cluster to detect and correlate incidents. It never mutates
-# anything — that capability lives only in the mcp-execute-server ClusterRole
-# below, deliberately as a separate, more narrowly scoped identity.
+# whole cluster to detect and correlate incidents, and reads Deployments to
+# verify a rollout succeeded after a remediation (scale_deployment,
+# patch_resources, rollback_deployment). It also watches Services and
+# Namespaces cluster-wide to build the live topology graph streamed on
+# /ws/topology (informer caches: get/list/watch), plus Pods (watch) to
+# resolve Beyla's workload names to Services. It never mutates anything —
+# that capability lives only in the mcp-execute-server ClusterRole below,
+# deliberately as a separate, more narrowly scoped identity.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -22,7 +27,15 @@ rules:
     verbs: ["list", "watch"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    # watch: the topology Pod informer maps Services to the workload names
+    # Beyla reports and pod IPs (edge server addresses) to Services.
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["services", "namespaces"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

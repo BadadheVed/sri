@@ -25,6 +25,36 @@ type RestartPodOutput struct {
 	Status string `json:"status" jsonschema:"result of the restart, e.g. 'deleted'"`
 }
 
+type ScaleDeploymentInput struct {
+	Namespace string `json:"namespace" jsonschema:"the pod's namespace"`
+	Name      string `json:"name" jsonschema:"the pod's own name — the owning Deployment is resolved automatically"`
+	Replicas  int32  `json:"replicas" jsonschema:"desired replica count"`
+}
+type ScaleDeploymentOutput struct {
+	Status         string `json:"status"`
+	DeploymentName string `json:"deployment_name"`
+}
+
+type PatchResourcesInput struct {
+	Namespace   string `json:"namespace" jsonschema:"the pod's namespace"`
+	Name        string `json:"name" jsonschema:"the pod's own name — the owning Deployment is resolved automatically"`
+	MemoryLimit string `json:"memory_limit,omitempty" jsonschema:"new memory limit, e.g. 512Mi (optional if cpu_limit set)"`
+	CPULimit    string `json:"cpu_limit,omitempty" jsonschema:"new CPU limit, e.g. 500m (optional if memory_limit set)"`
+}
+type PatchResourcesOutput struct {
+	Status         string `json:"status"`
+	DeploymentName string `json:"deployment_name"`
+}
+
+type RollbackDeploymentInput struct {
+	Namespace string `json:"namespace" jsonschema:"the pod's namespace"`
+	Name      string `json:"name" jsonschema:"the pod's own name — the owning Deployment is resolved automatically"`
+}
+type RollbackDeploymentOutput struct {
+	Status         string `json:"status"`
+	DeploymentName string `json:"deployment_name"`
+}
+
 func main() {
 	// settings.Load() fails fast (os.Exit) if MCP_EXECUTE_TOKEN or any
 	// other required var is missing — this process cannot reach
@@ -54,11 +84,44 @@ func main() {
 		return nil, RestartPodOutput{Status: "deleted"}, nil
 	}
 
+	scaleDeployment := func(ctx context.Context, req *mcp.CallToolRequest, input ScaleDeploymentInput) (*mcp.CallToolResult, ScaleDeploymentOutput, error) {
+		deploymentName, err := executor.ScaleDeployment(ctx, input.Namespace, input.Name, input.Replicas)
+		if err != nil {
+			slog.Error("scale_deployment failed", "namespace", input.Namespace, "name", input.Name, "error", err)
+			return nil, ScaleDeploymentOutput{}, err
+		}
+		slog.Info("scale_deployment executed", "namespace", input.Namespace, "deployment", deploymentName, "replicas", input.Replicas)
+		return nil, ScaleDeploymentOutput{Status: "scaled", DeploymentName: deploymentName}, nil
+	}
+
+	patchResources := func(ctx context.Context, req *mcp.CallToolRequest, input PatchResourcesInput) (*mcp.CallToolResult, PatchResourcesOutput, error) {
+		deploymentName, err := executor.PatchResources(ctx, input.Namespace, input.Name, input.MemoryLimit, input.CPULimit)
+		if err != nil {
+			slog.Error("patch_resources failed", "namespace", input.Namespace, "name", input.Name, "error", err)
+			return nil, PatchResourcesOutput{}, err
+		}
+		slog.Info("patch_resources executed", "namespace", input.Namespace, "deployment", deploymentName)
+		return nil, PatchResourcesOutput{Status: "patched", DeploymentName: deploymentName}, nil
+	}
+
+	rollbackDeployment := func(ctx context.Context, req *mcp.CallToolRequest, input RollbackDeploymentInput) (*mcp.CallToolResult, RollbackDeploymentOutput, error) {
+		deploymentName, err := executor.RollbackDeployment(ctx, input.Namespace, input.Name)
+		if err != nil {
+			slog.Error("rollback_deployment failed", "namespace", input.Namespace, "name", input.Name, "error", err)
+			return nil, RollbackDeploymentOutput{}, err
+		}
+		slog.Info("rollback_deployment executed", "namespace", input.Namespace, "deployment", deploymentName)
+		return nil, RollbackDeploymentOutput{Status: "rolled_back", DeploymentName: deploymentName}, nil
+	}
+
 	server := mcp.NewServer(&mcp.Implementation{Name: "sre-execute", Version: "v1.0.0"}, nil)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "restart_pod",
 		Description: "Deletes a pod so its owning controller recreates it. Idempotent — safe to call on an already-gone pod.",
 	}, restartPod)
+	mcp.AddTool(server, &mcp.Tool{Name: "scale_deployment", Description: "Resolves the pod's owning Deployment and sets its replica count."}, scaleDeployment)
+	mcp.AddTool(server, &mcp.Tool{Name: "patch_resources", Description: "Bumps memory/CPU limits on every container of the pod's owning Deployment."}, patchResources)
+	mcp.AddTool(server, &mcp.Tool{Name: "rollback_deployment", Description: "Reverts the pod's owning Deployment to its immediately previous ReplicaSet revision."}, rollbackDeployment)
 
 	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		return server

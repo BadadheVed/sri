@@ -31,4 +31,13 @@ spec:
                 name: {{ include "sage.backend.fullname" . }}
                 port:
                   number: {{ .Values.backend.port }}
+          {{- with .Values.backend.ingress.wsPath }}
+          - path: {{ . }}
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "sage.backend.fullname" $ }}
+                port:
+                  number: {{ $.Values.backend.port }}
+          {{- end }}
 {{- end }}

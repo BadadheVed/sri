@@ -17,10 +17,14 @@ spec:
     metadata:
       labels:
         {{- include "sage.backend.selectorLabels" . | nindent 8 }}
-      {{- with .Values.backend.podAnnotations }}
       annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.secrets.existingSecret }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.backend.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -45,6 +49,15 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.backend.port }}
+          env:
+            # Read back via Downward API, not templated from .Release.Namespace,
+            # so it's always exactly where this pod actually landed. Lets the
+            # watcher (internal/k8swatch) exclude SAGE's own namespace from
+            # signal detection — see settings.SelfNamespace.
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: {{ include "sage.fullname" . }}-config

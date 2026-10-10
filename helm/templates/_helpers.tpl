@@ -132,3 +132,49 @@ it. ClusterIP-only, never exposed externally (see templates/service-mcp-execute.
 {{- define "sage.mcpExecuteUrl" -}}
 http://{{ include "sage.mcpExecute.fullname" . }}:{{ .Values.mcpExecute.port }}
 {{- end -}}
+
+{{/*
+Per-component names for mcp-readonly-server and ai/, following the exact
+same pattern as sage.mcpExecute.fullname / sage.mcpExecute.selectorLabels.
+*/}}
+{{- define "sage.mcpReadonly.fullname" -}}
+{{- printf "%s-mcp-readonly-server" (include "sage.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "sage.mcpReadonly.selectorLabels" -}}
+{{ include "sage.selectorLabels" . }}
+app.kubernetes.io/component: mcp-readonly-server
+{{- end -}}
+
+{{- define "sage.rbac.mcpReadonly.name" -}}
+{{- printf "%s-%s-mcp-readonly-server" (include "sage.fullname" .) .Release.Namespace | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "sage.mcpReadonlyUrl" -}}
+http://{{ include "sage.mcpReadonly.fullname" . }}:{{ .Values.mcpReadonly.port }}
+{{- end -}}
+
+{{- define "sage.ai.fullname" -}}
+{{- printf "%s-ai" (include "sage.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "sage.ai.selectorLabels" -}}
+{{ include "sage.selectorLabels" . }}
+app.kubernetes.io/component: ai
+{{- end -}}
+
+{{/*
+In-cluster URL backend/ listens on — ai/ uses this to POST diagnoses back.
+*/}}
+{{- define "sage.backendCallbackUrl" -}}
+http://{{ include "sage.backend.fullname" . }}:{{ .Values.backend.port }}
+{{- end -}}
+
+{{/*
+In-cluster NATS URL. fullnameOverride pins this to a fixed name (same
+approach as sage.postgresqlHost) so it doesn't depend on the nats
+subchart's own fullname logic.
+*/}}
+{{- define "sage.natsUrl" -}}
+nats://{{ .Values.nats.fullnameOverride }}:4222
+{{- end -}}

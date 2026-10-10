@@ -6,19 +6,29 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"sre-platform/backend/internal/beylascrape"
 	"sre-platform/backend/internal/httpserver"
+	"sre-platform/backend/internal/incidentqueue"
 	"sre-platform/backend/internal/k8swatch"
 	"sre-platform/backend/internal/mcpexecute"
+	"sre-platform/backend/internal/metricsagg"
 	"sre-platform/backend/internal/reconcile"
 	"sre-platform/backend/internal/settings"
 	"sre-platform/backend/internal/signal"
 	"sre-platform/backend/internal/slackapproval"
 	"sre-platform/backend/internal/store"
+	"sre-platform/backend/internal/topology"
 )
+
+// metricsQuantiles is the fixed set of latency percentiles the metrics
+// WebSocket feed reports on every publish. Not a Settings field: nothing
+// today needs it configurable; promote it if a real caller does.
+var metricsQuantiles = []float64{0.5, 0.95, 0.99}
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -38,11 +48,74 @@ func main() {
 		slog.Error("connecting to mcp-execute-server", "error", err)
 		os.Exit(1)
 	}
+	publisher, err := incidentqueue.NewClient(ctx, cfg.NATSURL)
+	if err != nil {
+		slog.Error("connecting to NATS", "error", err)
+		os.Exit(1)
+	}
 
-	reconciler := reconcile.New(pgStore, restarter, slackClient, clientset, cfg.Mode, cfg.CorrelationWindow, cfg.VerifyTimeout)
-	watcher := k8swatch.NewWatcher(clientset, func(s signal.Signal) { reconciler.OnSignal(ctx, s) })
+	reconciler := reconcile.New(pgStore, restarter, publisher, slackClient, clientset, cfg.Mode, cfg.CorrelationWindow, cfg.VerifyTimeout)
+	watcher := k8swatch.NewWatcher(clientset, func(s signal.Signal) { reconciler.OnSignal(ctx, s) }, cfg.SelfNamespace)
 
-	router := httpserver.NewRouter(slackClient, pgStore)
+	// metricsHub fans out live latency/throughput to WebSocket clients; the
+	// Aggregator publishes into it. Source is beylascrape.NewSource when a
+	// Beyla deployment has been configured (cfg.BeylaEnabled) — off by
+	// default, since Beyla is a real out-of-band infra prerequisite this
+	// backend doesn't deploy itself — otherwise NoopSource, so every poll
+	// reports zero series but the hub/route/ws pipeline still runs
+	// end-to-end.
+	var metricsSource metricsagg.Source = metricsagg.NoopSource{}
+	// edgeScraper feeds the topology stream: Beyla's client-side HTTP counters
+	// when Beyla is enabled, otherwise NoopScraper so node-only snapshots
+	// (Services from the informer cache) still stream.
+	var edgeScraper topology.CounterScraper = topology.NoopScraper{}
+	if cfg.BeylaEnabled {
+		beylaSource := beylascrape.NewSource(clientset, http.DefaultClient, beylascrape.Config{
+			PodSelector: cfg.BeylaPodSelector,
+			Namespace:   cfg.BeylaNamespace,
+			Port:        cfg.BeylaPort,
+			Timeout:     10 * time.Second,
+			// One shared fetch per Beyla pod per tick: the metrics aggregator
+			// and the topology poller both start their tickers at startup
+			// with the same interval, so their ticks land together and the
+			// second consumer reads the first one's cached /metrics text.
+			// Half an interval keeps each tick's data fresh.
+			CacheTTL: cfg.MetricsPollInterval / 2,
+		})
+		metricsSource = beylaSource
+		edgeScraper = beylaSource
+	}
+	metricsHub := httpserver.NewMetricsHub()
+	aggregator := metricsagg.New(metricsSource, metricsHub, metricsQuantiles)
+	go func() {
+		if err := aggregator.Run(ctx, cfg.MetricsPollInterval); err != nil {
+			slog.Error("metricsagg.Aggregator.Run exited", "error", err)
+		}
+	}()
+
+	// Topology: Service/Namespace/Pod informers back the node list (and map
+	// Beyla's workload names to Services); the poller turns per-pod edge
+	// counters into rates each tick and the hub pushes per-client snapshots
+	// over /ws/topology. Nodes stream even without Beyla. Informer sync runs
+	// in the background so a slow or unauthorized API server can't block
+	// startup (Start logs an error if it takes over 30s); new connections
+	// wait up to 10s for it. Only wired when TOPOLOGY_WS_TOKEN is set —
+	// otherwise the endpoint is disabled and nothing here runs.
+	var topologyHub *topology.Hub
+	if cfg.TopologyWSToken == "" {
+		slog.Warn("topology websocket disabled: TOPOLOGY_WS_TOKEN is not set (/ws/topology returns 404)")
+	} else {
+		nodeProvider := topology.NewK8sNodeProvider(clientset, 10*time.Minute)
+		go func() {
+			if err := nodeProvider.Start(ctx); err != nil {
+				slog.Error("topology node provider failed to start", "error", err)
+			}
+		}()
+		topologyHub = topology.NewHub(nodeProvider)
+		go topology.RunTopologyPoller(ctx, cfg.MetricsPollInterval, edgeScraper, topology.NewRateCalculator(cfg.MetricsPollInterval), topologyHub)
+	}
+
+	router := httpserver.NewRouter(slackClient, pgStore, reconciler, cfg.DiagnosisCallbackToken, metricsHub, cfg.MCPReadonlyToken, topologyHub, cfg.TopologyWSToken)
 	go func() {
 		slog.Info("listening", "addr", cfg.HTTPAddr)
 		if err := http.ListenAndServe(cfg.HTTPAddr, router); err != nil {

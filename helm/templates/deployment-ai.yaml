@@ -1,0 +1,65 @@
+# ai/ has no Service — nothing calls into it. It only makes outbound calls
+# (NATS, mcp-readonly-server, backend's callback endpoint, the LLM
+# provider), so unlike every other component in this chart it needs no
+# ServiceAccount/RBAC either — it never talks to the Kubernetes API
+# directly, only through mcp-readonly-server.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sage.ai.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sage.ai.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.ai.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "sage.ai.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sage.ai.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.ai.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+      containers:
+        - name: ai
+          image: "{{ .Values.ai.image.repository }}:{{ .Values.ai.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.ai.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "sage.fullname" . }}-config
+            - secretRef:
+                name: {{ include "sage.secretName" . }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          {{- with .Values.ai.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.ai.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ai.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ai.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

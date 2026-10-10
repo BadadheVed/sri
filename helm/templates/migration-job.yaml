@@ -54,6 +54,8 @@ spec:
                 sleep 2
               done
               psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f /migrations/0001_init.sql
+              psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f /migrations/0002_pending_diagnosis.sql
+              psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f /migrations/0003_dead_letter_dispatches.sql
           env:
             - name: DATABASE_URL
               valueFrom:

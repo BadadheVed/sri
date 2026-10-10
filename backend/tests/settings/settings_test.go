@@ -10,17 +10,21 @@ import (
 
 func validSettings() settings.Settings {
 	return settings.Settings{
-		DatabaseURL:          "postgres://sre:sre@localhost:5432/sre_platform?sslmode=disable",
-		Mode:                 gate.ModeManual,
-		VerifyTimeout:        60 * time.Second,
-		CorrelationWindow:    60 * time.Second,
-		SlackBotToken:        "xoxb-real-token",
-		SlackSigningSecret:   "real-signing-secret",
-		SlackApprovalChannel: "#sre-approvals",
-		HTTPAddr:             ":8080",
-		MCPExecuteAddr:       ":8090",
-		MCPExecuteToken:      "real-shared-secret",
-		MCPExecuteURL:        "http://localhost:8090",
+		DatabaseURL:            "postgres://sre:sre@localhost:5432/sre_platform?sslmode=disable",
+		Mode:                   gate.ModeManual,
+		VerifyTimeout:          60 * time.Second,
+		CorrelationWindow:      60 * time.Second,
+		SlackBotToken:          "xoxb-real-token",
+		SlackSigningSecret:     "real-signing-secret",
+		SlackApprovalChannel:   "#sre-approvals",
+		HTTPAddr:               ":8080",
+		MCPExecuteAddr:         ":8090",
+		MCPExecuteToken:        "real-shared-secret",
+		MCPExecuteURL:          "http://localhost:8090",
+		MCPReadonlyAddr:        ":8091",
+		MCPReadonlyToken:       "real-readonly-token",
+		NATSURL:                "nats://localhost:4222",
+		DiagnosisCallbackToken: "real-diagnosis-token",
 	}
 }
 
@@ -74,6 +78,21 @@ func TestSettings_Validate_FailsWhenModeInvalid(t *testing.T) {
 	}
 }
 
+func TestSettings_Validate_RequiresNATSDiagnosisAndReadonlyTokens(t *testing.T) {
+	s := validSettings()
+	s.NATSURL = ""
+	s.DiagnosisCallbackToken = ""
+	s.MCPReadonlyToken = ""
+
+	err := s.Validate()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !contains(err.Error(), "NATS_URL") || !contains(err.Error(), "DIAGNOSIS_CALLBACK_TOKEN") || !contains(err.Error(), "MCP_READONLY_TOKEN") {
+		t.Errorf("expected error to name all three missing fields, got: %v", err)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
 		func() bool {
@@ -84,4 +103,26 @@ func contains(s, substr string) bool {
 			}
 			return false
 		}())
+}
+
+// TOPOLOGY_WS_TOKEN is optional: empty disables /ws/topology rather than
+// failing startup, and it is NOT the MCP read-only token.
+func TestSettings_TopologyWSTokenOptionalAndSeparate(t *testing.T) {
+	s := validSettings()
+	s.TopologyWSToken = ""
+	if err := s.Validate(); err != nil {
+		t.Fatalf("empty TOPOLOGY_WS_TOKEN must be valid (endpoint disabled), got %v", err)
+	}
+	for k, v := range map[string]string{
+		"DATABASE_URL": "postgres://x", "SLACK_BOT_TOKEN": "b", "SLACK_SIGNING_SECRET": "s",
+		"MCP_EXECUTE_TOKEN": "e", "MCP_READONLY_TOKEN": "ro", "NATS_URL": "nats://x",
+		"DIAGNOSIS_CALLBACK_TOKEN": "d", "REMEDIATION_MODE": "manual", "BEYLA_ENABLED": "false",
+		"TOPOLOGY_WS_TOKEN": "topo",
+	} {
+		t.Setenv(k, v)
+	}
+	loaded := settings.Load()
+	if loaded.TopologyWSToken != "topo" || loaded.MCPReadonlyToken != "ro" {
+		t.Fatalf("TopologyWSToken=%q MCPReadonlyToken=%q", loaded.TopologyWSToken, loaded.MCPReadonlyToken)
+	}
 }
